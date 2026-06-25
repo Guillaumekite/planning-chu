@@ -1,0 +1,1 @@
+/Users/guillaumeegmann/conductor/repos/planning-chu/.claude/skills/gstack/diagram/SKILL.md
