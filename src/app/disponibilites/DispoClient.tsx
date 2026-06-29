@@ -1,31 +1,37 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import {
-  loadAvailability, saveAvailability,
-  MONTHS_FR, WEEKDAYS_FR, AVAIL_STATES, AVAIL_INFO,
-  type Availability, type MonthAvailability,
-} from '@/lib/store';
+import { MONTHS_FR, WEEKDAYS_FR, AVAIL_STATES, AVAIL_INFO, type Availability } from '@/lib/store';
 import { buildMonth } from '@/engine/calendar';
 import { DEFAULT_WEIGHTS } from '@/engine/types';
 
-export default function DispoClient({ isAdmin }: { isAdmin: boolean }) {
-  const [doctors, setDoctors] = useState<{ name: string }[]>([]);
+type Doc = { id: number; name: string };
+type Avail = Record<string, Record<number, Availability>>;
+type Conge = Record<string, Record<number, string>>;
+
+export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; doctorId: number | null }) {
+  const [doctors, setDoctors] = useState<Doc[]>([]);
   const [year, setYear] = useState(2026);
   const [month, setMonth] = useState(4);
-  const [avail, setAvail] = useState<MonthAvailability>({});
-  const [loaded, setLoaded] = useState(false);
+  const [avail, setAvail] = useState<Avail>({});
+  const [conge, setConge] = useState<Conge>({});
   const [brush, setBrush] = useState<Availability>('souhait_garde');
   const [painting, setPainting] = useState(false);
 
   useEffect(() => {
-    fetch('/api/doctors').then((r) => r.ok ? r.json() : { doctors: [] }).then((d) => {
-      setDoctors((d.doctors ?? []).map((x: { name: string }) => ({ name: x.name })));
-      setLoaded(true);
+    fetch('/api/doctors').then((r) => (r.ok ? r.json() : { doctors: [] })).then((d) => {
+      const all: Doc[] = (d.doctors ?? []).map((x: Doc) => ({ id: x.id, name: x.name }));
+      setDoctors(isAdmin ? all : all.filter((x) => x.id === doctorId));
     });
-  }, []);
-  useEffect(() => { if (loaded) setAvail(loadAvailability(year, month)); }, [year, month, loaded]);
+  }, [isAdmin, doctorId]);
+
+  const loadAvail = useCallback(async () => {
+    const r = await fetch(`/api/availability?year=${year}&month=${month}`);
+    if (r.ok) { const d = await r.json(); setAvail(d.availability ?? {}); setConge(d.congeStatus ?? {}); }
+  }, [year, month]);
+  useEffect(() => { loadAvail(); }, [loadAvail]);
+
   useEffect(() => {
     const up = () => setPainting(false);
     window.addEventListener('mouseup', up);
@@ -33,19 +39,29 @@ export default function DispoClient({ isAdmin }: { isAdmin: boolean }) {
   }, []);
 
   const days = buildMonth(year, month, DEFAULT_WEIGHTS, []);
-  const stateOf = (doc: string, day: number): Availability => avail[doc]?.[day] ?? 'dispo';
+  const stateOf = (name: string, day: number): Availability => avail[name]?.[day] ?? 'dispo';
 
-  function paint(doc: string, day: number) {
-    const updated: MonthAvailability = { ...avail, [doc]: { ...(avail[doc] ?? {}) } };
-    if (brush === 'dispo') delete updated[doc][day];
-    else updated[doc][day] = brush;
-    setAvail(updated);
-    saveAvailability(year, month, updated);
+  function cellClass(name: string, day: number): { label: string; cls: string } {
+    const st = stateOf(name, day);
+    if (st === 'conge') {
+      const status = conge[name]?.[day];
+      if (status === 'approved') return { label: 'Congé', cls: 'bg-green-300 text-green-900' };
+      if (status === 'refused') return { label: 'Congé', cls: 'bg-red-300 text-red-900 line-through' };
+    }
+    return { label: AVAIL_INFO[st].label, cls: AVAIL_INFO[st].cls };
   }
-  function resetRow(doc: string) {
-    const updated = { ...avail, [doc]: {} };
-    setAvail(updated);
-    saveAvailability(year, month, updated);
+
+  async function paint(doc: Doc, day: number) {
+    const next = brush;
+    setAvail((a) => {
+      const row = { ...(a[doc.name] ?? {}) };
+      if (next === 'dispo') delete row[day]; else row[day] = next;
+      return { ...a, [doc.name]: row };
+    });
+    await fetch('/api/availability', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ year, month, day, state: next, doctorId: isAdmin ? doc.id : undefined }),
+    });
   }
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -55,14 +71,14 @@ export default function DispoClient({ isAdmin }: { isAdmin: boolean }) {
   return (
     <main className="mx-auto max-w-[1400px] p-6 font-sans text-gray-900 select-none">
       <div className="mb-1 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Disponibilités des médecins</h1>
+        <h1 className="text-2xl font-bold">{isAdmin ? 'Disponibilités des médecins' : 'Mes disponibilités'}</h1>
         <div className="flex items-center gap-4 text-sm">
           {isAdmin && <Link href="/admin" className="font-medium text-blue-600 hover:underline">← Admin</Link>}
           <button onClick={logout} className="text-gray-500 hover:text-red-600">Déconnexion</button>
         </div>
       </div>
       <p className="mb-4 text-sm text-gray-500">
-        Choisis un état dans la palette, puis clique (ou glisse) sur les jours pour l&apos;appliquer.
+        Choisis un état dans la palette, puis clique (ou glisse) sur les jours. Enregistré dans la base partagée.
       </p>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -87,7 +103,7 @@ export default function DispoClient({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       {doctors.length === 0 ? (
-        <p className="text-sm text-gray-400">Aucun médecin. L&apos;administrateur doit en ajouter dans l&apos;espace admin.</p>
+        <p className="text-sm text-gray-400">{isAdmin ? "Aucun médecin. Ajoute-en dans l'espace admin." : 'Ton compte n’est pas relié à une fiche médecin. Contacte l’administrateur.'}</p>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-gray-200">
           <table className="border-collapse text-center text-xs">
@@ -104,20 +120,17 @@ export default function DispoClient({ isAdmin }: { isAdmin: boolean }) {
             </thead>
             <tbody>
               {doctors.map((doc) => (
-                <tr key={doc.name}>
-                  <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">
-                    {doc.name}
-                    <button onClick={() => resetRow(doc.name)} className="ml-2 text-[10px] text-gray-400 hover:text-blue-600" title="Tout remettre à dispo">↺</button>
-                  </td>
+                <tr key={doc.id}>
+                  <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">{doc.name}</td>
                   {days.map((d) => {
-                    const info = AVAIL_INFO[stateOf(doc.name, d.day)];
+                    const c = cellClass(doc.name, d.day);
                     return (
                       <td key={d.day}
-                        onMouseDown={(e) => { e.preventDefault(); setPainting(true); paint(doc.name, d.day); }}
-                        onMouseEnter={() => { if (painting) paint(doc.name, d.day); }}
-                        className={`cursor-pointer border border-gray-100 px-1 py-1 text-[10px] ${info.cls}`}
-                        title={`${WEEKDAYS_FR[d.weekday]} ${d.day} — ${info.legend}`}>
-                        {info.label}
+                        onMouseDown={(e) => { e.preventDefault(); setPainting(true); paint(doc, d.day); }}
+                        onMouseEnter={() => { if (painting) paint(doc, d.day); }}
+                        className={`cursor-pointer border border-gray-100 px-1 py-1 text-[10px] ${c.cls}`}
+                        title={`${WEEKDAYS_FR[d.weekday]} ${d.day}`}>
+                        {c.label}
                       </td>
                     );
                   })}
@@ -129,8 +142,9 @@ export default function DispoClient({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       <p className="mt-4 text-sm text-gray-500">
-        Enregistré dans ce navigateur pour l&apos;instant. Le partage des disponibilités via la base
-        arrive à l&apos;étape suivante.
+        Congé : <span className="rounded bg-blue-200 px-1 text-blue-800">en attente</span> →
+        <span className="ml-1 rounded bg-green-300 px-1 text-green-900">validé</span> ou
+        <span className="ml-1 rounded bg-red-300 px-1 text-red-900">refusé</span> par l&apos;admin.
       </p>
     </main>
   );

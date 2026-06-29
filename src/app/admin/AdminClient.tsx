@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { loadAvailability, MONTHS_FR, WEEKDAYS_FR, postStyle } from '@/lib/store';
+import { MONTHS_FR, WEEKDAYS_FR, postStyle } from '@/lib/store';
 
 type Doctor = {
   id: number; name: string; universitaire: boolean; university_ratio: number;
@@ -89,7 +89,8 @@ export default function AdminClient() {
   async function generate() {
     setResult(null);
     if (active.length < 2) { setResult({ error: 'Sélectionne au moins 2 médecins pour ce mois (case « Ce mois »).' }); return; }
-    const availability = loadAvailability(year, month);
+    const availRes = await fetch(`/api/availability?year=${year}&month=${month}`);
+    const availability = availRes.ok ? (await availRes.json()).availability ?? {} : {};
     const profiles: Record<string, { universitaire?: boolean; universityRatio?: number; fte?: number }> = {};
     for (const d of active) {
       const p: { universitaire?: boolean; universityRatio?: number; fte?: number } = {};

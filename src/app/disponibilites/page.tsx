@@ -7,5 +7,5 @@ export const runtime = 'nodejs';
 export default async function DisponibilitesPage() {
   const session = await getSession();
   if (!session) redirect('/login');
-  return <DispoClient isAdmin={session.role === 'admin'} />;
+  return <DispoClient isAdmin={session.role === 'admin'} doctorId={session.doctorId} />;
 }
