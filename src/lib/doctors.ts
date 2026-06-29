@@ -1,7 +1,16 @@
 // Data access for doctors, their login accounts, and the per-month roster.
 import bcrypt from 'bcryptjs';
+import { randomInt } from 'crypto';
 import { query, queryOne } from '@/db/client';
 import { ensureSchema } from '@/db/schema';
+
+/** Readable temporary password (no ambiguous characters like O/0, l/1). */
+export function generatePassword(length = 8): string {
+  const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+  let p = '';
+  for (let i = 0; i < length; i++) p += chars[randomInt(chars.length)];
+  return p;
+}
 
 export type DoctorRow = {
   id: number;

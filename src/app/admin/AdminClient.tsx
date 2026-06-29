@@ -31,11 +31,10 @@ export default function AdminClient() {
   const [year, setYear] = useState(2026);
   const [month, setMonth] = useState(4);
   const [newName, setNewName] = useState('');
-  const [newPassword, setNewPassword] = useState('');
   const [holidays, setHolidays] = useState('');
   const [result, setResult] = useState<GenResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pw, setPw] = useState<Record<number, string>>({});
+  const [credential, setCredential] = useState<{ name: string; password: string } | null>(null);
 
   const loadDoctors = useCallback(async () => {
     const res = await fetch('/api/doctors');
@@ -56,10 +55,12 @@ export default function AdminClient() {
     if (!name) return;
     const res = await fetch('/api/doctors', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, password: newPassword || undefined }),
+      body: JSON.stringify({ name }),
     });
-    if (!res.ok) { alert((await res.json()).error ?? 'Erreur'); return; }
-    setNewName(''); setNewPassword('');
+    const data = await res.json();
+    if (!res.ok) { alert(data.error ?? 'Erreur'); return; }
+    setNewName('');
+    if (data.password) setCredential({ name, password: data.password });
     await loadDoctors();
   }
   async function patchDoctor(id: number, patch: Record<string, unknown>) {
@@ -77,13 +78,13 @@ export default function AdminClient() {
     setRosterIds(next);
     await fetch('/api/roster', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year, month, doctorIds: [...next] }) });
   }
-  async function saveAccount(d: Doctor) {
-    const password = pw[d.id];
-    if (!password) return;
-    await fetch(`/api/doctors/${d.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: d.name, password }) });
-    setPw((p) => ({ ...p, [d.id]: '' }));
-    await loadDoctors();
-    alert(`Compte de ${d.name} enregistré.`);
+  async function resetPassword(d: Doctor) {
+    const res = await fetch(`/api/doctors/${d.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ generatePassword: true, username: d.name }),
+    });
+    const data = await res.json();
+    if (res.ok && data.password) { setCredential({ name: d.name, password: data.password }); await loadDoctors(); }
   }
 
   async function generate() {
@@ -144,10 +145,19 @@ export default function AdminClient() {
         <div className="mb-4 flex flex-wrap gap-2">
           <input className="rounded border border-gray-300 px-3 py-2 text-sm" placeholder="Nom du médecin" value={newName}
             onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addDoctor()} />
-          <input className="rounded border border-gray-300 px-3 py-2 text-sm" placeholder="Mot de passe (optionnel)" value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addDoctor()} />
           <button onClick={addDoctor} className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ Ajouter</button>
+          <span className="self-center text-xs text-gray-400">Le mot de passe est généré automatiquement.</span>
         </div>
+
+        {credential && (
+          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
+            Identifiants de <b>{credential.name}</b> — mot de passe :{' '}
+            <code className="rounded bg-white px-2 py-0.5 font-mono text-base">{credential.password}</code>{' '}
+            <button onClick={() => navigator.clipboard?.writeText(credential.password)} className="ml-2 text-blue-600 hover:underline">copier</button>
+            <button onClick={() => setCredential(null)} className="ml-3 text-gray-500 hover:underline">fermer</button>
+            <div className="mt-1 text-xs text-amber-700">Note-le et communique-le au médecin. Il le changera à sa 1ʳᵉ connexion.</div>
+          </div>
+        )}
 
         {doctors.length === 0 ? (
           <p className="text-sm text-gray-400">Aucun médecin. Ajoute-en pour commencer.</p>
@@ -172,11 +182,13 @@ export default function AdminClient() {
                     <td className="pr-4"><input type="checkbox" checked={d.part_time} onChange={(e) => patchDoctor(d.id, { part_time: e.target.checked })} /></td>
                     <td className="pr-4">{d.part_time && <input type="number" min={0} max={100} className="w-14 rounded border border-gray-300 px-1 py-0.5" value={d.part_time_ratio} onChange={(e) => patchDoctor(d.id, { part_time_ratio: Number(e.target.value) })} />}</td>
                     <td className="pr-4">
-                      <div className="flex items-center gap-1">
-                        <input type="password" placeholder={d.has_account ? '••• (changer)' : 'mot de passe'} className="w-28 rounded border border-gray-300 px-1 py-0.5"
-                          value={pw[d.id] ?? ''} onChange={(e) => setPw((p) => ({ ...p, [d.id]: e.target.value }))} />
-                        <button onClick={() => saveAccount(d)} className="text-xs text-blue-600 hover:underline">{d.has_account ? 'MAJ' : 'créer'}</button>
-                        {d.has_account && <span className="text-green-600" title="Compte créé">✓</span>}
+                      <div className="flex items-center gap-2">
+                        {d.has_account
+                          ? <span className="text-green-600" title="Compte actif">✓ actif</span>
+                          : <span className="text-gray-400">—</span>}
+                        <button onClick={() => resetPassword(d)} className="text-xs text-blue-600 hover:underline">
+                          {d.has_account ? 'réinitialiser' : 'créer le compte'}
+                        </button>
                       </div>
                     </td>
                     <td className="text-right"><button onClick={() => removeDoctor(d.id)} className="text-xs text-red-600 hover:underline">suppr.</button></td>

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSession } from '@/lib/auth';
-import { updateDoctor, deleteDoctor, setAccount } from '@/lib/doctors';
+import { updateDoctor, deleteDoctor, setAccount, generatePassword } from '@/lib/doctors';
 
 export const runtime = 'nodejs';
 
@@ -18,6 +18,7 @@ const PatchBody = z.object({
   part_time_ratio: z.number().min(0).max(100).optional(),
   password: z.string().min(1).optional(), // (re)set the doctor's login password
   username: z.string().min(1).optional(),
+  generatePassword: z.boolean().optional(), // auto-generate and return a new password
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -25,8 +26,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const id = Number((await params).id);
   const parsed = PatchBody.safeParse(await req.json().catch(() => null));
   if (!parsed.success || !Number.isInteger(id)) return NextResponse.json({ error: 'Requête invalide' }, { status: 400 });
-  const { password, username, ...profile } = parsed.data;
+  const { password, username, generatePassword: gen, ...profile } = parsed.data;
   await updateDoctor(id, profile);
+  if (gen && username) {
+    const newPassword = generatePassword();
+    await setAccount(id, username, newPassword);
+    return NextResponse.json({ ok: true, password: newPassword });
+  }
   if (password && username) await setAccount(id, username, password);
   return NextResponse.json({ ok: true });
 }

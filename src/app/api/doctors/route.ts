@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSession } from '@/lib/auth';
-import { listDoctors, createDoctor, setAccount } from '@/lib/doctors';
+import { listDoctors, createDoctor, setAccount, generatePassword } from '@/lib/doctors';
 
 export const runtime = 'nodejs';
 
@@ -24,8 +24,11 @@ export async function POST(req: Request) {
   if (!parsed.success) return NextResponse.json({ error: 'Requête invalide' }, { status: 400 });
   try {
     const doc = await createDoctor(parsed.data.name.trim());
-    if (parsed.data.password) await setAccount(doc.id, doc.name, parsed.data.password);
-    return NextResponse.json({ doctor: { ...doc, has_account: !!parsed.data.password } });
+    // Auto-generate a temporary password on first creation (the admin shares it; the doctor
+    // changes it on first login). A provided password, if any, overrides.
+    const password = parsed.data.password?.trim() || generatePassword();
+    await setAccount(doc.id, doc.name, password);
+    return NextResponse.json({ doctor: { ...doc, has_account: true }, password });
   } catch (e) {
     const msg = (e as Error).message.includes('unique') ? 'Ce nom existe déjà.' : 'Erreur.';
     return NextResponse.json({ error: msg }, { status: 400 });
