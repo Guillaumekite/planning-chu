@@ -6,7 +6,6 @@ import Link from 'next/link';
 export default function Home() {
   const [passcode, setPasscode] = useState('');
   const [error, setError] = useState('');
-  const [granted, setGranted] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -21,7 +20,8 @@ export default function Home() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? 'Code incorrect.'); return; }
-      setGranted(true);
+      window.location.href = '/planning';
+      return;
     } catch {
       setError('Erreur réseau.');
     } finally {
@@ -45,23 +45,13 @@ export default function Home() {
           (en haut à droite) pour déclarer leurs disponibilités et leurs congés.
         </p>
 
-        {granted ? (
-          <div className="mt-8 rounded-lg border border-green-300 bg-green-50 p-4">
-            <p className="font-medium text-green-800">✓ Accès accordé.</p>
-            <p className="mt-2 text-sm text-green-700">
-              La consultation publique des plannings publiés arrive très bientôt. En attendant,
-              accède à l&apos;<Link href="/admin" className="underline">espace admin</Link>.
-            </p>
-          </div>
-        ) : (
-          <form onSubmit={submit} className="mt-8 flex gap-2">
-            <input className="flex-1 rounded border border-gray-300 px-3 py-2" placeholder="Code d'accès" value={passcode}
-              onChange={(e) => setPasscode(e.target.value)} autoFocus />
-            <button disabled={loading} className="rounded bg-blue-600 px-5 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-              {loading ? '…' : 'Entrer'}
-            </button>
-          </form>
-        )}
+        <form onSubmit={submit} className="mt-8 flex gap-2">
+          <input className="flex-1 rounded border border-gray-300 px-3 py-2" placeholder="Code d'accès" value={passcode}
+            onChange={(e) => setPasscode(e.target.value)} autoFocus />
+          <button disabled={loading} className="rounded bg-blue-600 px-5 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+            {loading ? '…' : 'Entrer'}
+          </button>
+        </form>
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
       </main>
     </div>

@@ -110,6 +110,17 @@ export default function AdminClient() {
     } finally { setLoading(false); }
   }
 
+  const [publishMsg, setPublishMsg] = useState('');
+  async function publish() {
+    if (!result || !('status' in result) || result.status !== 'feasible') return;
+    setPublishMsg('');
+    const res = await fetch('/api/plannings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ year, month, grid: result.grid, days: result.days, gardeEquity: result.gardeEquity }),
+    });
+    setPublishMsg(res.ok ? '✓ Planning publié — consultable via le code d\'accès.' : 'Échec de la publication.');
+  }
+
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
     window.location.href = '/';
@@ -199,6 +210,12 @@ export default function AdminClient() {
         </div>
       </section>
 
+      {result && 'status' in result && result.status === 'feasible' && (
+        <div className="mb-4 flex items-center gap-3">
+          <button onClick={publish} className="rounded bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700">Publier ce planning</button>
+          {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
+        </div>
+      )}
       {result && <Result result={result} doctors={active.map((d) => d.name)} month={month} year={year} />}
     </main>
   );

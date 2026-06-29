@@ -29,12 +29,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Ce compte n'est pas administrateur." }, { status: 403 });
   }
 
-  const session: Session = { userId: user.id, username: user.username, role: user.role, doctorId: user.doctor_id };
+  const session: Session = {
+    userId: user.id, username: user.username, role: user.role,
+    doctorId: user.doctor_id, mustChangePassword: user.must_change_password,
+  };
+  const home = user.role === 'admin' && asAdmin ? '/admin' : '/disponibilites';
   const res = NextResponse.json({
     ok: true,
     role: user.role,
     mustChangePassword: user.must_change_password,
-    redirect: user.role === 'admin' && asAdmin ? '/admin' : '/disponibilites',
+    redirect: user.must_change_password ? '/change-password' : home,
   });
   res.cookies.set(SESSION_COOKIE, await sign(session), cookieOptions);
   return res;

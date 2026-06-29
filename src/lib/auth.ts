@@ -9,7 +9,7 @@ export const SESSION_COOKIE = 'pc_session';
 export const VIEW_COOKIE = 'pc_view';
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
-export type Session = { userId: number; username: string; role: 'admin' | 'medecin'; doctorId: number | null };
+export type Session = { userId: number; username: string; role: 'admin' | 'medecin'; doctorId: number | null; mustChangePassword: boolean };
 
 let secretCache: string | null = null;
 async function getSecret(): Promise<string> {
