@@ -32,6 +32,72 @@ export async function getAvailability(
   return { availability, congeStatus };
 }
 
+export type CongeStatus = 'pending' | 'approved' | 'refused';
+export type CongeRun = {
+  doctorId: number;
+  name: string;
+  startDay: number;
+  endDay: number;
+  length: number;
+  days: number[];
+  status: CongeStatus | 'mixed';
+};
+
+/** List leave requests grouped into consecutive-day runs, for the admin validation screen. */
+export async function listCongeRuns(year: number, month: number): Promise<CongeRun[]> {
+  await ensureSchema();
+  const rows = await query<{ doctor_id: number; name: string; day: number; conge_status: string | null }>(
+    `SELECT a.doctor_id, d.name, a.day, a.conge_status
+     FROM availability a JOIN doctors d ON d.id = a.doctor_id
+     WHERE a.year = $1 AND a.month = $2 AND a.state = 'conge'
+     ORDER BY d.name, a.day`,
+    [year, month],
+  );
+  const runs: CongeRun[] = [];
+  let cur: CongeRun | null = null;
+  let statuses: Set<string> = new Set();
+  const flush = () => {
+    if (cur) {
+      cur.length = cur.days.length;
+      cur.endDay = cur.days[cur.days.length - 1];
+      cur.status = statuses.size === 1 ? ([...statuses][0] as CongeStatus) : 'mixed';
+      runs.push(cur);
+    }
+    cur = null;
+    statuses = new Set();
+  };
+  for (const r of rows) {
+    const st = r.conge_status ?? 'pending';
+    if (cur && cur.doctorId === r.doctor_id && r.day === cur.days[cur.days.length - 1] + 1) {
+      cur.days.push(r.day);
+    } else {
+      flush();
+      cur = { doctorId: r.doctor_id, name: r.name, startDay: r.day, endDay: r.day, length: 1, days: [r.day], status: 'pending' };
+    }
+    statuses.add(st);
+  }
+  flush();
+  return runs;
+}
+
+/** Set the approval status on specific leave days for a doctor. */
+export async function setCongeStatus(
+  doctorId: number,
+  year: number,
+  month: number,
+  days: number[],
+  status: CongeStatus,
+): Promise<void> {
+  if (!days.length) return;
+  await ensureSchema();
+  const placeholders = days.map((_, i) => `$${i + 4}`).join(', ');
+  await query(
+    `UPDATE availability SET conge_status = $1
+     WHERE doctor_id = $2 AND year = $3 AND day IN (${placeholders}) AND state = 'conge' AND month = $${days.length + 4}`,
+    [status, doctorId, year, ...days, month],
+  );
+}
+
 /** Upsert (or clear, when state = 'dispo') one day for one doctor. */
 export async function setCell(
   doctorId: number,

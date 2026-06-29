@@ -120,6 +120,7 @@ export default function AdminClient() {
       <div className="mb-1 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Admin — Planning des gardes</h1>
         <div className="flex items-center gap-4 text-sm">
+          <Link href="/admin/conges" className="font-medium text-blue-600 hover:underline">Congés</Link>
           <Link href="/disponibilites" className="font-medium text-blue-600 hover:underline">Disponibilités</Link>
           <button onClick={logout} className="text-gray-500 hover:text-red-600">Déconnexion</button>
         </div>
