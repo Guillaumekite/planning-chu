@@ -90,15 +90,6 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     window.location.href = '/';
   }
 
-  // Calendar weeks (Monday-first) for the single-doctor view.
-  const weeks: (typeof days[number] | null)[][] = [];
-  if (days.length) {
-    const cells: (typeof days[number] | null)[] = [...Array(days[0].weekday).fill(null), ...days];
-    while (cells.length % 7 !== 0) cells.push(null);
-    for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
-  }
-  const selfName = doctors[0]?.name;
-
   return (
     <main className="mx-auto max-w-[1400px] p-6 font-sans text-gray-900 select-none">
       <div className="mb-1 flex items-center justify-between">
@@ -136,16 +127,16 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       </div>
 
       {doctors.length === 0 ? (
-        <p className="text-sm text-gray-400">{isAdmin ? "Aucun médecin." : 'Ton compte n’est pas relié à une fiche médecin. Contacte l’administrateur.'}</p>
-      ) : isAdmin ? (
-        // Vue admin : tableau tous les médecins × jours
+        <p className="text-sm text-gray-400">{isAdmin ? 'Aucun médecin.' : 'Ton compte n’est pas relié à une fiche médecin. Contacte l’administrateur.'}</p>
+      ) : (
+        // Calendrier en ligne : 1er → fin du mois sur une ligne par médecin.
         <div className="overflow-x-auto rounded-lg border border-gray-200">
           <table className="border-collapse text-center text-xs">
             <thead>
               <tr>
                 <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-3 py-1 text-left">Médecin</th>
                 {days.map((d) => (
-                  <th key={d.day} className={`min-w-[30px] border-b border-gray-200 px-1 py-1 ${d.isWeekend ? 'bg-amber-100' : 'bg-gray-50'}`}>
+                  <th key={d.day} className={`min-w-[32px] border-b border-gray-200 px-1 py-1 ${d.isWeekend ? 'bg-amber-100' : 'bg-gray-50'}`}>
                     <div className="text-[10px] text-gray-500">{WEEKDAYS_FR[d.weekday]}</div>
                     <div className="font-semibold">{d.day}</div>
                   </th>
@@ -158,33 +149,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
                   <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">{doc.name}</td>
                   {days.map((d) => {
                     const c = cellLook(doc.name, d.day);
-                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`cursor-pointer border border-gray-100 px-1 py-1 text-[10px] ${c.cls}`}>{c.label}</td>;
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        // Vue médecin : calendrier mensuel
-        <div className="max-w-2xl rounded-lg border border-gray-200 p-2">
-          <table className="w-full table-fixed border-collapse text-center">
-            <thead>
-              <tr>{WEEKDAYS_FR.map((w) => <th key={w} className="py-1 text-xs font-medium text-gray-500">{w}</th>)}</tr>
-            </thead>
-            <tbody>
-              {weeks.map((week, wi) => (
-                <tr key={wi}>
-                  {week.map((cd, di) => {
-                    if (!cd) return <td key={di} className="h-16 border border-gray-50" />;
-                    const c = cellLook(selfName, cd.day);
-                    return (
-                      <td key={di} onClick={() => apply(selfName, cd.day)}
-                        className={`h-16 cursor-pointer border border-gray-100 align-top ${c.cls}`}>
-                        <div className="px-1 text-left text-xs font-semibold">{cd.day}</div>
-                        <div className="text-[11px] font-medium">{c.label}</div>
-                      </td>
-                    );
+                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`cursor-pointer border border-gray-100 px-1 py-2 text-[10px] ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
                   })}
                 </tr>
               ))}

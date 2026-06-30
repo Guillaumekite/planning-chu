@@ -2,17 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { MONTHS_FR, WEEKDAYS_FR, postStyle } from '@/lib/store';
+import { MONTHS_FR } from '@/lib/store';
+import PlanningGrid, { type GridDay } from '@/components/PlanningGrid';
 
-type Day = { day: number; weekday: number; isWeekend: boolean; isHoliday: boolean };
-type Planning = { year: number; month: number; grid: Record<string, Record<number, string>>; days: Day[] };
-
-function dayMarker(weekday: number): string {
-  if (weekday === 1) return 'bib·staff';
-  if (weekday === 2) return 'réunion';
-  if (weekday === 4) return 'staff';
-  return '';
-}
+type Planning = { year: number; month: number; grid: Record<string, Record<number, string>>; days: GridDay[] };
 
 export default function PlanningView({ loggedIn }: { loggedIn: boolean }) {
   const [months, setMonths] = useState<{ year: number; month: number }[]>([]);
@@ -60,30 +53,7 @@ export default function PlanningView({ loggedIn }: { loggedIn: boolean }) {
         ) : !planning ? (
           <p className="text-sm text-gray-400">Chargement…</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-gray-200">
-            <table className="border-collapse text-center text-xs">
-              <thead>
-                <tr>
-                  <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-3 py-1 text-left">Médecin</th>
-                  {planning.days.map((d) => (
-                    <th key={d.day} className={`min-w-[36px] border-b border-gray-200 px-1 py-1 ${d.isWeekend || d.isHoliday ? 'bg-amber-100' : 'bg-gray-50'}`}>
-                      <div className="text-[10px] text-gray-500">{WEEKDAYS_FR[d.weekday]}</div>
-                      <div className="font-semibold">{d.day}</div>
-                      <div className="text-[8px] leading-tight text-blue-400">{dayMarker(d.weekday)}</div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {doctors.map((doc) => (
-                  <tr key={doc}>
-                    <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">{doc}</td>
-                    {planning.days.map((d) => { const post = planning.grid[doc]?.[d.day]; return <td key={d.day} className={`border border-gray-100 px-1 py-1 ${postStyle(post)}`}>{post ?? ''}</td>; })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <PlanningGrid days={planning.days} grid={planning.grid} doctors={doctors} />
         )}
       </main>
     </div>

@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { MONTHS_FR, WEEKDAYS_FR, postStyle } from '@/lib/store';
+import { MONTHS_FR } from '@/lib/store';
+import PlanningGrid from '@/components/PlanningGrid';
 
 type Doctor = {
   id: number; name: string; universitaire: boolean; university_ratio: number;
@@ -17,12 +18,6 @@ type GenResult =
 
 function parseDays(s: string): number[] {
   return s.split(/[,\s]+/).map((x) => parseInt(x, 10)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 31);
-}
-function dayMarker(weekday: number): string {
-  if (weekday === 1) return 'bib·staff';
-  if (weekday === 2) return 'réunion';
-  if (weekday === 4) return 'staff';
-  return '';
 }
 
 export default function AdminClient() {
@@ -238,35 +233,11 @@ function Result({ result, doctors, month, year }: { result: GenResult; doctors: 
   if (result.status === 'infeasible') {
     return <Banner><p className="font-semibold">Mois infaisable</p><p className="mt-1">{result.reason}</p><p className="mt-1 text-sm">Éligibles : {result.eligible.join(', ') || '—'}</p></Banner>;
   }
-  const byDoc = result.grid;
   return (
     <div className="space-y-6">
       <div>
         <h2 className="mb-2 text-lg font-semibold">Planning — {MONTHS_FR[month - 1]} {year}</h2>
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="border-collapse text-center text-xs">
-            <thead>
-              <tr>
-                <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-3 py-1 text-left">Médecin</th>
-                {result.days.map((d) => (
-                  <th key={d.day} className={`min-w-[36px] border-b border-gray-200 px-1 py-1 ${d.isWeekend || d.isHoliday ? 'bg-amber-100' : 'bg-gray-50'}`}>
-                    <div className="text-[10px] text-gray-500">{WEEKDAYS_FR[d.weekday]}</div>
-                    <div className="font-semibold">{d.day}</div>
-                    <div className="text-[8px] leading-tight text-blue-400">{dayMarker(d.weekday)}</div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {doctors.map((doc) => (
-                <tr key={doc}>
-                  <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">{doc}</td>
-                  {result.days.map((d) => { const post = byDoc[doc]?.[d.day]; return <td key={d.day} className={`border border-gray-100 px-1 py-1 ${postStyle(post)}`}>{post ?? ''}</td>; })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <PlanningGrid days={result.days} grid={result.grid} doctors={doctors} />
       </div>
       <div>
         <h2 className="mb-2 text-lg font-semibold">Équité des gardes (écart : {result.gardeEquity.spread})</h2>
