@@ -38,6 +38,8 @@ export interface DoctorProfile {
   universityRatio?: number;
   /** Full-time-equivalent fraction (0-1). Part-timers get proportionally fewer gardes. Default 1. */
   fte?: number;
+  /** This doctor does acupuncture (post ACU) every Monday when present (e.g. Dr Dzierzek). */
+  acupuncture?: boolean;
 }
 
 export interface PlanningInput {
@@ -160,7 +162,29 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const grid: Record<DoctorId, Record<number, string>> = {};
   for (const doc of doctors) grid[doc] = {};
 
-  const isPresent = (doc: DoctorId, day: number) => PRESENT(avail(input, doc, day)) && !tpDays[doc].has(day);
+  const acupuncture = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acupuncture));
+
+  // Compensation off (récup) for weekend gardes whose RS falls on a non-working day.
+  // Team ≥ 12 active → Saturday-garde doctors get the FOLLOWING Monday off.
+  // Team > 12 active → Friday-garde doctors also get the following Monday off.
+  const teamSize = doctors.length;
+  const compOff = new Set<string>(); // `${doctor}|${day}`
+  if (teamSize >= 12) {
+    for (const cd of days) {
+      const g = gardeByDay[cd.day];
+      if (!g) continue;
+      const isSat = cd.weekday === 5;
+      const isFri = cd.weekday === 4 && teamSize > 12;
+      if (!isSat && !isFri) continue;
+      const mondayDay = cd.day + (isSat ? 2 : 3); // Sat→+2, Fri→+3 lands on Monday
+      const md = days.find((x) => x.day === mondayDay);
+      if (!md || md.weekday !== 0) continue;
+      for (const doc of [g.G1, g.G2]) if (doc) compOff.add(`${doc}|${mondayDay}`);
+    }
+  }
+
+  const isPresent = (doc: DoctorId, day: number) =>
+    PRESENT(avail(input, doc, day)) && !tpDays[doc].has(day) && !compOff.has(`${doc}|${day}`);
   const isGarde = (doc: DoctorId, day: number) => gardeByDay[day]?.G1 === doc || gardeByDay[day]?.G2 === doc;
   const isRS = (doc: DoctorId, day: number) =>
     isPresent(doc, day) && !isGarde(doc, day) && (gardeByDay[day - 1]?.G1 === doc || gardeByDay[day - 1]?.G2 === doc);
@@ -178,6 +202,14 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     if (g.G1) grid[g.G1][cd.day] = 'G1';
     if (g.G2) grid[g.G2][cd.day] = 'G2';
     for (const doc of doctors) if (isRS(doc, cd.day) && !grid[doc][cd.day]) grid[doc][cd.day] = 'RS';
+  }
+
+  // Acupuncture: dedicated doctors get ACU every Monday they're present (priority post).
+  for (const cd of days) {
+    if (cd.weekday !== 0) continue; // Monday = 0
+    for (const doc of acupuncture) {
+      if (isPresent(doc, cd.day) && !grid[doc][cd.day]) grid[doc][cd.day] = 'ACU';
+    }
   }
 
   // Pass 2 — University (U): for each universitaire doctor, mark ~ratio% of their WEEKDAY

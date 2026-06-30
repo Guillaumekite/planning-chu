@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS doctors (
   active           boolean NOT NULL DEFAULT true
 );
 
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS acupuncture boolean NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS users (
   id                   serial PRIMARY KEY,
   username             text UNIQUE NOT NULL,

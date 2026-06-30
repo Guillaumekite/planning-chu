@@ -7,7 +7,7 @@ import PlanningGrid from '@/components/PlanningGrid';
 
 type Doctor = {
   id: number; name: string; universitaire: boolean; university_ratio: number;
-  part_time: boolean; part_time_ratio: number; has_account: boolean;
+  part_time: boolean; part_time_ratio: number; acupuncture: boolean; has_account: boolean;
 };
 type ApiDay = { day: number; weekday: number; isWeekend: boolean; isHoliday: boolean };
 type Equity = { count: Record<string, number>; weekendCount: Record<string, number>; heavyCount: Record<string, number>; spread: number };
@@ -93,11 +93,12 @@ export default function AdminClient() {
     if (active.length < 2) { setResult({ error: 'Sélectionne au moins 2 médecins pour ce mois (case « Ce mois »).' }); return; }
     const availRes = await fetch(`/api/availability?year=${year}&month=${month}`);
     const availability = availRes.ok ? (await availRes.json()).availability ?? {} : {};
-    const profiles: Record<string, { universitaire?: boolean; universityRatio?: number; fte?: number }> = {};
+    const profiles: Record<string, { universitaire?: boolean; universityRatio?: number; fte?: number; acupuncture?: boolean }> = {};
     for (const d of active) {
-      const p: { universitaire?: boolean; universityRatio?: number; fte?: number } = {};
+      const p: { universitaire?: boolean; universityRatio?: number; fte?: number; acupuncture?: boolean } = {};
       if (d.universitaire) { p.universitaire = true; p.universityRatio = d.university_ratio || 50; }
       if (d.part_time) p.fte = Math.max(0, Math.min(100, d.part_time_ratio || 100)) / 100;
+      if (d.acupuncture) p.acupuncture = true;
       if (Object.keys(p).length) profiles[d.name] = p;
     }
     setLoading(true);
@@ -170,6 +171,7 @@ export default function AdminClient() {
                   <th className="py-2 pr-4">Ce mois</th><th className="pr-4">Nom</th>
                   <th className="pr-4">Univ.</th><th className="pr-4">% fac</th>
                   <th className="pr-4">Tps partiel</th><th className="pr-4">% prés.</th>
+                  <th className="pr-4">Acu lun.</th>
                   <th className="pr-4">Compte</th><th></th>
                 </tr>
               </thead>
@@ -182,6 +184,7 @@ export default function AdminClient() {
                     <td className="pr-4">{d.universitaire && <input type="number" min={0} max={100} className="w-14 rounded border border-gray-300 px-1 py-0.5" value={d.university_ratio} onChange={(e) => patchDoctor(d.id, { university_ratio: Number(e.target.value) })} />}</td>
                     <td className="pr-4"><input type="checkbox" checked={d.part_time} onChange={(e) => patchDoctor(d.id, { part_time: e.target.checked })} /></td>
                     <td className="pr-4">{d.part_time && <input type="number" min={0} max={100} className="w-14 rounded border border-gray-300 px-1 py-0.5" value={d.part_time_ratio} onChange={(e) => patchDoctor(d.id, { part_time_ratio: Number(e.target.value) })} />}</td>
+                    <td className="pr-4"><input type="checkbox" checked={d.acupuncture} onChange={(e) => patchDoctor(d.id, { acupuncture: e.target.checked })} /></td>
                     <td className="pr-4">
                       <div className="flex items-center gap-2">
                         {d.has_account

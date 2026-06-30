@@ -21,7 +21,7 @@ describe('solvePlanning — gardes & structure', () => {
   });
 
   it('gives every present weekday doctor a post, and leaves weekend off-doctors blank', async () => {
-    const docs = doctors(12);
+    const docs = doctors(11); // < 12 → no Monday-off compensation, clean invariant
     const res = await solvePlanning({ year: 2026, month: 4, doctors: docs });
     if (res.status !== 'feasible') throw new Error('expected feasible');
     for (const cd of res.days) {
@@ -35,6 +35,41 @@ describe('solvePlanning — gardes & structure', () => {
         }
       }
     }
+  });
+
+  it('gives ACU to an acupuncture doctor every Monday they are present', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D02: { acupuncture: true } } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    let acu = 0;
+    for (const cd of res.days) {
+      if (cd.weekday === 0 && res.grid.D02[cd.day] === 'ACU') acu++;
+    }
+    expect(acu).toBeGreaterThan(0);
+    // No other doctor ever gets ACU.
+    for (const cd of res.days) for (const doc of docs.filter((d) => d !== 'D02')) {
+      expect(res.grid[doc][cd.day]).not.toBe('ACU');
+    }
+  });
+
+  it('compensates Saturday gardes with the following Monday off when team ≥ 12', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    let checked = 0;
+    for (const cd of res.days) {
+      if (cd.weekday !== 5) continue; // Saturday
+      const mondayDay = cd.day + 2;
+      const md = res.days.find((x) => x.day === mondayDay);
+      if (!md || md.weekday !== 0) continue;
+      for (const doc of docs) {
+        if (['G1', 'G2'].includes(res.grid[doc][cd.day])) {
+          expect(!res.grid[doc][mondayDay]).toBe(true); // off (blank) that Monday
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 
   it('puts RS the weekday after a garde', async () => {
@@ -53,7 +88,7 @@ describe('solvePlanning — gardes & structure', () => {
 
   it('labels congé as CA; no_garde works but never gets a garde', async () => {
     const res = await solvePlanning({
-      year: 2026, month: 4, doctors: doctors(12),
+      year: 2026, month: 4, doctors: doctors(11),
       availability: { D01: { 6: 'conge', 8: 'no_garde' } }, // weekdays
     });
     if (res.status !== 'feasible') throw new Error('expected feasible');

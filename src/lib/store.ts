@@ -90,6 +90,8 @@ export function postStyle(post: string | undefined): string {
       return 'bg-cyan-100 text-cyan-700';
     case 'CD':
       return 'bg-fuchsia-100 text-fuchsia-700';
+    case 'ACU':
+      return 'bg-lime-100 text-lime-700';
     case 'CA':
       return 'bg-green-100 text-green-700';
     case 'ABS':
