@@ -39,7 +39,7 @@ export default function PlanningView({ loggedIn }: { loggedIn: boolean }) {
           <h1 className="text-2xl font-bold">Planning des gardes</h1>
           {months.length > 0 && (
             <select
-              className="rounded border border-gray-300 px-2 py-1.5 text-sm"
+              className="w-44 rounded border border-gray-300 px-2 py-1.5 text-sm"
               value={sel ? `${sel.year}-${sel.month}` : ''}
               onChange={(e) => { const [y, m] = e.target.value.split('-').map(Number); setSel({ year: y, month: m }); }}
             >

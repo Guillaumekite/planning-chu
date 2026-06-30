@@ -114,15 +114,18 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
         ))}
       </div>
 
-      {/* Navigation mois (pages du calendrier) */}
-      <div className="mb-4 flex items-center gap-4">
-        <button onClick={() => navigate(-1)} className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50">‹ Mois précédent</button>
-        <span className="min-w-[160px] text-center text-lg font-semibold">{MONTHS_FR[month - 1]} {year}</span>
-        <button onClick={() => navigate(1)} className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50">Mois suivant ›</button>
-        <div className="ml-auto flex items-center gap-3">
-          {dirty && <span className="text-sm text-amber-600">● modifications non enregistrées</span>}
-          {savedMsg && <span className="text-sm text-green-700">{savedMsg}</span>}
-          <button onClick={save} disabled={!dirty} className="rounded bg-green-600 px-5 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-40">Enregistrer</button>
+      {/* Navigation mois — largeurs figées pour que rien ne bouge d'un mois à l'autre */}
+      <div className="mb-4 flex items-center gap-2">
+        <button onClick={() => navigate(-1)} className="w-10 rounded border border-gray-300 py-1.5 text-sm hover:bg-gray-50">‹</button>
+        <span className="inline-block w-52 text-center text-lg font-semibold">{MONTHS_FR[month - 1]} {year}</span>
+        <button onClick={() => navigate(1)} className="w-10 rounded border border-gray-300 py-1.5 text-sm hover:bg-gray-50">›</button>
+        <div className="ml-auto flex w-72 items-center justify-end gap-3">
+          {dirty
+            ? <span className="text-sm text-amber-600">● non enregistré</span>
+            : savedMsg
+              ? <span className="text-sm text-green-700">{savedMsg}</span>
+              : null}
+          <button onClick={save} disabled={!dirty} className="w-32 rounded bg-green-600 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-40">Enregistrer</button>
         </div>
       </div>
 
