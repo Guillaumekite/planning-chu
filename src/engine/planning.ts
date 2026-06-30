@@ -131,21 +131,25 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     if (wd.length) wishes[doc] = [...new Set([...(wishes[doc] ?? []), ...wd])];
   }
 
-  // A garde is blocked unless the doctor is garde-available that day (and not on a TP day).
+  // Acupuncture doctors keep their Mondays free for ACU — so they're also kept off garde on
+  // Mondays AND Sundays (a Sunday garde would force a Monday rest), guaranteeing ACU every Monday.
+  const acupuncture = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acupuncture));
+  const acuBlocked = (doc: DoctorId, cd: CalendarDay) => acupuncture.has(doc) && (cd.weekday === 0 || cd.weekday === 6);
+
+  // A garde is blocked unless the doctor is garde-available that day (and not on a TP / ACU day).
   const gardeBlocked: Record<DoctorId, number[]> = {};
   for (const doc of doctors) {
     const blocked: number[] = [];
-    for (const cd of days) if (!GARDEABLE(avail(input, doc, cd.day)) || tpDays[doc].has(cd.day)) blocked.push(cd.day);
+    for (const cd of days) if (!GARDEABLE(avail(input, doc, cd.day)) || tpDays[doc].has(cd.day) || acuBlocked(doc, cd)) blocked.push(cd.day);
     if (blocked.length) gardeBlocked[doc] = blocked;
   }
 
-  // Garde fairness weight = part-time fraction × garde-availability fraction.
-  // Counts days the doctor CAN take a garde (excludes absent / congé / no-garde / TP), so a
-  // doctor away — or no-garde — half the month carries ~half the gardes; 1-2 days barely change it.
+  // Garde fairness weight = part-time fraction × garde-availability fraction (days NOT blocked).
   const totalDays = days.length;
   const gardeWeight: Record<DoctorId, number> = {};
   for (const doc of doctors) {
-    const gardeDays = days.filter((cd) => GARDEABLE(avail(input, doc, cd.day)) && !tpDays[doc].has(cd.day)).length;
+    const blockedSet = new Set(gardeBlocked[doc] ?? []);
+    const gardeDays = days.filter((cd) => !blockedSet.has(cd.day)).length;
     gardeWeight[doc] = fte[doc] * (gardeDays / totalDays);
   }
 
@@ -161,8 +165,6 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
   const grid: Record<DoctorId, Record<number, string>> = {};
   for (const doc of doctors) grid[doc] = {};
-
-  const acupuncture = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acupuncture));
 
   // Compensation off (récup) for weekend gardes whose RS falls on a non-working day.
   // Team ≥ 12 active → Saturday-garde doctors get the FOLLOWING Monday off.
