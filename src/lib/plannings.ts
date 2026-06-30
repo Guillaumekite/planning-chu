@@ -30,11 +30,21 @@ export async function savePublished(
 
 export async function getPublished(year: number, month: number): Promise<PlanningRow | null> {
   await ensureSchema();
-  return queryOne<PlanningRow>(
+  const row = await queryOne<Record<string, unknown>>(
     `SELECT year, month, grid, days, garde_equity FROM plannings
      WHERE year = $1 AND month = $2 AND status = 'published'`,
     [year, month],
   );
+  if (!row) return null;
+  // jsonb columns can come back as strings depending on the driver (postgres-js) — normalise.
+  const parse = (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v);
+  return {
+    year: row.year as number,
+    month: row.month as number,
+    grid: parse(row.grid),
+    days: parse(row.days),
+    garde_equity: parse(row.garde_equity),
+  } as PlanningRow;
 }
 
 export async function listPublishedMonths(): Promise<{ year: number; month: number }[]> {
