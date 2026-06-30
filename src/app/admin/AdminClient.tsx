@@ -45,6 +45,12 @@ export default function AdminClient() {
 
   const active = doctors.filter((d) => rosterIds.has(d.id));
 
+  function shiftMonth(delta: number) {
+    let m = month + delta, y = year;
+    if (m < 1) { m = 12; y -= 1; } else if (m > 12) { m = 1; y += 1; }
+    setMonth(m); setYear(y);
+  }
+
   async function addDoctor() {
     const name = newName.trim();
     if (!name) return;
@@ -199,16 +205,12 @@ export default function AdminClient() {
       {/* Génération */}
       <section className="mb-6 rounded-lg border border-gray-200 p-4">
         <h2 className="mb-3 text-lg font-semibold">Générer le mois</h2>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="text-sm">Mois
-            <select className="ml-2 rounded border border-gray-300 px-2 py-2" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
-              {MONTHS_FR.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">Année
-            <input type="number" className="ml-2 w-24 rounded border border-gray-300 px-2 py-2" value={year} onChange={(e) => setYear(Number(e.target.value))} />
-          </label>
-          <label className="text-sm">Jours fériés
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Navigation par flèches, largeurs figées (stable d'un mois à l'autre) */}
+          <button onClick={() => shiftMonth(-1)} className="w-10 rounded border border-gray-300 py-1.5 text-sm hover:bg-gray-50">‹</button>
+          <span className="inline-block w-52 text-center text-lg font-semibold">{MONTHS_FR[month - 1]} {year}</span>
+          <button onClick={() => shiftMonth(1)} className="w-10 rounded border border-gray-300 py-1.5 text-sm hover:bg-gray-50">›</button>
+          <label className="ml-4 text-sm">Jours fériés
             <input className="ml-2 w-36 rounded border border-gray-300 px-2 py-2" placeholder="ex : 1, 8" value={holidays} onChange={(e) => setHolidays(e.target.value)} />
           </label>
           <button onClick={generate} disabled={loading} className="rounded bg-green-600 px-5 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
