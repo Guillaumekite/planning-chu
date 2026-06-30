@@ -138,7 +138,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
               <tr>
                 <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-2 py-1.5 text-left">Médecin</th>
                 {days.map((d) => (
-                  <th key={d.day} className={`min-w-[34px] border-b border-gray-200 px-0.5 py-1.5 ${d.isWeekend ? 'bg-amber-100' : 'bg-gray-50'}`}>
+                  <th key={d.day} className={`w-9 min-w-9 border-b border-gray-200 px-0 py-1 ${d.isWeekend ? 'bg-amber-100' : 'bg-gray-50'}`}>
                     <div className="text-[10px] text-gray-500">{WEEKDAYS_FR[d.weekday]}</div>
                     <div className="text-sm font-semibold">{d.day}</div>
                   </th>
@@ -151,7 +151,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
                   <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-2 py-1.5 text-left font-medium whitespace-nowrap">{doc.name}</td>
                   {days.map((d) => {
                     const c = cellLook(doc.name, d.day);
-                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`h-10 cursor-pointer border border-gray-100 px-0.5 text-xs ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
+                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`h-9 w-9 min-w-9 cursor-pointer border border-gray-100 p-0 text-xs ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
                   })}
                 </tr>
               ))}
