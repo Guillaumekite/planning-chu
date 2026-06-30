@@ -14,10 +14,11 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   const [doctors, setDoctors] = useState<Doc[]>([]);
   const [year, setYear] = useState(2026);
   const [month, setMonth] = useState(4);
-  const [avail, setAvail] = useState<Avail>({});
+  const [saved, setSaved] = useState<Avail>({});
+  const [pending, setPending] = useState<Avail>({});
   const [conge, setConge] = useState<Conge>({});
   const [brush, setBrush] = useState<Availability>('souhait_garde');
-  const [painting, setPainting] = useState(false);
+  const [savedMsg, setSavedMsg] = useState('');
 
   useEffect(() => {
     fetch('/api/doctors').then((r) => (r.ok ? r.json() : { doctors: [] })).then((d) => {
@@ -28,20 +29,15 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
 
   const loadAvail = useCallback(async () => {
     const r = await fetch(`/api/availability?year=${year}&month=${month}`);
-    if (r.ok) { const d = await r.json(); setAvail(d.availability ?? {}); setConge(d.congeStatus ?? {}); }
+    if (r.ok) { const d = await r.json(); setSaved(d.availability ?? {}); setPending(d.availability ?? {}); setConge(d.congeStatus ?? {}); }
   }, [year, month]);
   useEffect(() => { loadAvail(); }, [loadAvail]);
 
-  useEffect(() => {
-    const up = () => setPainting(false);
-    window.addEventListener('mouseup', up);
-    return () => window.removeEventListener('mouseup', up);
-  }, []);
-
   const days = buildMonth(year, month, DEFAULT_WEIGHTS, []);
-  const stateOf = (name: string, day: number): Availability => avail[name]?.[day] ?? 'dispo';
+  const dirty = JSON.stringify(saved) !== JSON.stringify(pending);
+  const stateOf = (name: string, day: number): Availability => pending[name]?.[day] ?? 'dispo';
 
-  function cellClass(name: string, day: number): { label: string; cls: string } {
+  function cellLook(name: string, day: number): { label: string; cls: string } {
     const st = stateOf(name, day);
     if (st === 'conge') {
       const status = conge[name]?.[day];
@@ -51,38 +47,74 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     return { label: AVAIL_INFO[st].label, cls: AVAIL_INFO[st].cls };
   }
 
-  async function paint(doc: Doc, day: number) {
-    const next = brush;
-    setAvail((a) => {
-      const row = { ...(a[doc.name] ?? {}) };
-      if (next === 'dispo') delete row[day]; else row[day] = next;
-      return { ...a, [doc.name]: row };
-    });
-    await fetch('/api/availability', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ year, month, day, state: next, doctorId: isAdmin ? doc.id : undefined }),
+  function apply(name: string, day: number) {
+    setSavedMsg('');
+    setPending((p) => {
+      const row = { ...(p[name] ?? {}) };
+      if (brush === 'dispo') delete row[day]; else row[day] = brush;
+      return { ...p, [name]: row };
     });
   }
+
+  function navigate(delta: number) {
+    if (dirty && !confirm('Tu as des modifications non enregistrées. Continuer sans enregistrer ?')) return;
+    let m = month + delta, y = year;
+    if (m < 1) { m = 12; y -= 1; } else if (m > 12) { m = 1; y += 1; }
+    setMonth(m); setYear(y);
+  }
+
+  async function save() {
+    const names = new Set([...Object.keys(saved), ...Object.keys(pending)]);
+    const changes: { name: string; day: number; state: Availability }[] = [];
+    for (const name of names) {
+      const a = saved[name] ?? {}; const b = pending[name] ?? {};
+      const dayset = new Set([...Object.keys(a), ...Object.keys(b)].map(Number));
+      for (const day of dayset) {
+        const before = a[day] ?? 'dispo'; const after = b[day] ?? 'dispo';
+        if (before !== after) changes.push({ name, day, state: after });
+      }
+    }
+    for (const c of changes) {
+      const id = doctors.find((d) => d.name === c.name)?.id;
+      await fetch('/api/availability', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year, month, day: c.day, state: c.state, doctorId: isAdmin ? id : undefined }),
+      });
+    }
+    await loadAvail();
+    setSavedMsg(`✓ ${changes.length} modification(s) enregistrée(s).`);
+  }
+
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
     window.location.href = '/';
   }
+
+  // Calendar weeks (Monday-first) for the single-doctor view.
+  const weeks: (typeof days[number] | null)[][] = [];
+  if (days.length) {
+    const cells: (typeof days[number] | null)[] = [...Array(days[0].weekday).fill(null), ...days];
+    while (cells.length % 7 !== 0) cells.push(null);
+    for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  }
+  const selfName = doctors[0]?.name;
 
   return (
     <main className="mx-auto max-w-[1400px] p-6 font-sans text-gray-900 select-none">
       <div className="mb-1 flex items-center justify-between">
         <h1 className="text-2xl font-bold">{isAdmin ? 'Disponibilités des médecins' : 'Mes disponibilités'}</h1>
         <div className="flex items-center gap-4 text-sm">
-          {isAdmin && <Link href="/admin" className="font-medium text-blue-600 hover:underline">← Admin</Link>}
+          <Link href="/planning" className="font-medium text-blue-600 hover:underline">← Planning commun</Link>
+          {isAdmin && <Link href="/admin" className="font-medium text-blue-600 hover:underline">Admin</Link>}
           <button onClick={logout} className="text-gray-500 hover:text-red-600">Déconnexion</button>
         </div>
       </div>
       <p className="mb-4 text-sm text-gray-500">
-        Choisis un état dans la palette, puis clique (ou glisse) sur les jours. Enregistré dans la base partagée.
+        Choisis un état, applique-le sur les jours, puis clique <b>Enregistrer</b>.
       </p>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="text-sm text-gray-500">Pinceau :</span>
+        <span className="text-sm text-gray-500">État :</span>
         {AVAIL_STATES.map((s) => (
           <button key={s} onClick={() => setBrush(s)}
             className={`rounded px-3 py-1.5 text-sm ${AVAIL_INFO[s].cls} ${brush === s ? 'ring-2 ring-blue-500' : 'ring-1 ring-gray-300'}`}>
@@ -91,20 +123,22 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
         ))}
       </div>
 
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <label className="text-sm">Mois
-          <select className="ml-2 rounded border border-gray-300 px-2 py-2" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
-            {MONTHS_FR.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-          </select>
-        </label>
-        <label className="text-sm">Année
-          <input type="number" className="ml-2 w-24 rounded border border-gray-300 px-2 py-2" value={year} onChange={(e) => setYear(Number(e.target.value))} />
-        </label>
+      {/* Navigation mois (pages du calendrier) */}
+      <div className="mb-4 flex items-center gap-4">
+        <button onClick={() => navigate(-1)} className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50">‹ Mois précédent</button>
+        <span className="min-w-[160px] text-center text-lg font-semibold">{MONTHS_FR[month - 1]} {year}</span>
+        <button onClick={() => navigate(1)} className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50">Mois suivant ›</button>
+        <div className="ml-auto flex items-center gap-3">
+          {dirty && <span className="text-sm text-amber-600">● modifications non enregistrées</span>}
+          {savedMsg && <span className="text-sm text-green-700">{savedMsg}</span>}
+          <button onClick={save} disabled={!dirty} className="rounded bg-green-600 px-5 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-40">Enregistrer</button>
+        </div>
       </div>
 
       {doctors.length === 0 ? (
-        <p className="text-sm text-gray-400">{isAdmin ? "Aucun médecin. Ajoute-en dans l'espace admin." : 'Ton compte n’est pas relié à une fiche médecin. Contacte l’administrateur.'}</p>
-      ) : (
+        <p className="text-sm text-gray-400">{isAdmin ? "Aucun médecin." : 'Ton compte n’est pas relié à une fiche médecin. Contacte l’administrateur.'}</p>
+      ) : isAdmin ? (
+        // Vue admin : tableau tous les médecins × jours
         <div className="overflow-x-auto rounded-lg border border-gray-200">
           <table className="border-collapse text-center text-xs">
             <thead>
@@ -123,14 +157,32 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
                 <tr key={doc.id}>
                   <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">{doc.name}</td>
                   {days.map((d) => {
-                    const c = cellClass(doc.name, d.day);
+                    const c = cellLook(doc.name, d.day);
+                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`cursor-pointer border border-gray-100 px-1 py-1 text-[10px] ${c.cls}`}>{c.label}</td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        // Vue médecin : calendrier mensuel
+        <div className="max-w-2xl rounded-lg border border-gray-200 p-2">
+          <table className="w-full table-fixed border-collapse text-center">
+            <thead>
+              <tr>{WEEKDAYS_FR.map((w) => <th key={w} className="py-1 text-xs font-medium text-gray-500">{w}</th>)}</tr>
+            </thead>
+            <tbody>
+              {weeks.map((week, wi) => (
+                <tr key={wi}>
+                  {week.map((cd, di) => {
+                    if (!cd) return <td key={di} className="h-16 border border-gray-50" />;
+                    const c = cellLook(selfName, cd.day);
                     return (
-                      <td key={d.day}
-                        onMouseDown={(e) => { e.preventDefault(); setPainting(true); paint(doc, d.day); }}
-                        onMouseEnter={() => { if (painting) paint(doc, d.day); }}
-                        className={`cursor-pointer border border-gray-100 px-1 py-1 text-[10px] ${c.cls}`}
-                        title={`${WEEKDAYS_FR[d.weekday]} ${d.day}`}>
-                        {c.label}
+                      <td key={di} onClick={() => apply(selfName, cd.day)}
+                        className={`h-16 cursor-pointer border border-gray-100 align-top ${c.cls}`}>
+                        <div className="px-1 text-left text-xs font-semibold">{cd.day}</div>
+                        <div className="text-[11px] font-medium">{c.label}</div>
                       </td>
                     );
                   })}
@@ -144,7 +196,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       <p className="mt-4 text-sm text-gray-500">
         Congé : <span className="rounded bg-blue-200 px-1 text-blue-800">en attente</span> →
         <span className="ml-1 rounded bg-green-300 px-1 text-green-900">validé</span> ou
-        <span className="ml-1 rounded bg-red-300 px-1 text-red-900">refusé</span> par l&apos;admin.
+        <span className="ml-1 rounded bg-red-300 px-1 text-red-900">refusé</span> par l&apos;admin (après enregistrement).
       </p>
     </main>
   );
