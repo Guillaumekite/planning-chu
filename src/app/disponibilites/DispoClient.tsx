@@ -91,7 +91,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   }
 
   return (
-    <main className="mx-auto max-w-[1400px] p-6 font-sans text-gray-900 select-none">
+    <main className="w-full p-6 font-sans text-gray-900 select-none">
       <div className="mb-1 flex items-center justify-between">
         <h1 className="text-2xl font-bold">{isAdmin ? 'Disponibilités des médecins' : 'Mes disponibilités'}</h1>
         <div className="flex items-center gap-4 text-sm">
@@ -133,14 +133,14 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       ) : (
         // Calendrier en ligne : 1er → fin du mois sur une ligne par médecin.
         <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="border-collapse text-center text-xs">
+          <table className="border-collapse text-center text-sm">
             <thead>
               <tr>
-                <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-3 py-1 text-left">Médecin</th>
+                <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-3 py-2 text-left">Médecin</th>
                 {days.map((d) => (
-                  <th key={d.day} className={`min-w-[32px] border-b border-gray-200 px-1 py-1 ${d.isWeekend ? 'bg-amber-100' : 'bg-gray-50'}`}>
-                    <div className="text-[10px] text-gray-500">{WEEKDAYS_FR[d.weekday]}</div>
-                    <div className="font-semibold">{d.day}</div>
+                  <th key={d.day} className={`min-w-[46px] border-b border-gray-200 px-1 py-2 ${d.isWeekend ? 'bg-amber-100' : 'bg-gray-50'}`}>
+                    <div className="text-[11px] text-gray-500">{WEEKDAYS_FR[d.weekday]}</div>
+                    <div className="text-base font-semibold">{d.day}</div>
                   </th>
                 ))}
               </tr>
@@ -148,10 +148,10 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
             <tbody>
               {doctors.map((doc) => (
                 <tr key={doc.id}>
-                  <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">{doc.name}</td>
+                  <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-2 text-left font-medium whitespace-nowrap">{doc.name}</td>
                   {days.map((d) => {
                     const c = cellLook(doc.name, d.day);
-                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`cursor-pointer border border-gray-100 px-1 py-2 text-[10px] ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
+                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`h-12 cursor-pointer border border-gray-100 px-1 text-xs ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
                   })}
                 </tr>
               ))}
