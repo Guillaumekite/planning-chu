@@ -136,11 +136,11 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
           <table className="border-collapse text-center text-sm">
             <thead>
               <tr>
-                <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-3 py-2 text-left">Médecin</th>
+                <th className="sticky left-0 z-10 border-b border-r border-gray-200 bg-gray-50 px-2 py-1.5 text-left">Médecin</th>
                 {days.map((d) => (
-                  <th key={d.day} className={`min-w-[46px] border-b border-gray-200 px-1 py-2 ${d.isWeekend ? 'bg-amber-100' : 'bg-gray-50'}`}>
-                    <div className="text-[11px] text-gray-500">{WEEKDAYS_FR[d.weekday]}</div>
-                    <div className="text-base font-semibold">{d.day}</div>
+                  <th key={d.day} className={`min-w-[34px] border-b border-gray-200 px-0.5 py-1.5 ${d.isWeekend ? 'bg-amber-100' : 'bg-gray-50'}`}>
+                    <div className="text-[10px] text-gray-500">{WEEKDAYS_FR[d.weekday]}</div>
+                    <div className="text-sm font-semibold">{d.day}</div>
                   </th>
                 ))}
               </tr>
@@ -148,10 +148,10 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
             <tbody>
               {doctors.map((doc) => (
                 <tr key={doc.id}>
-                  <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-2 text-left font-medium whitespace-nowrap">{doc.name}</td>
+                  <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-2 py-1.5 text-left font-medium whitespace-nowrap">{doc.name}</td>
                   {days.map((d) => {
                     const c = cellLook(doc.name, d.day);
-                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`h-12 cursor-pointer border border-gray-100 px-1 text-xs ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
+                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`h-10 cursor-pointer border border-gray-100 px-0.5 text-xs ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
                   })}
                 </tr>
               ))}
