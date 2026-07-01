@@ -24,6 +24,7 @@ export default function PlanningView({ loggedIn }: { loggedIn: boolean }) {
   }, [sel]);
 
   const doctors = planning ? Object.keys(planning.grid).sort((a, b) => a.localeCompare(b)) : [];
+  const idx = sel ? months.findIndex((m) => m.year === sel.year && m.month === sel.month) : -1;
 
   return (
     <div className="min-h-screen font-sans text-gray-900">
@@ -34,19 +35,17 @@ export default function PlanningView({ loggedIn }: { loggedIn: boolean }) {
           : <Link href="/login" className="flex items-center gap-1.5 rounded-full border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"><span aria-hidden>👤</span> Se connecter</Link>}
       </header>
 
-      <main className="mx-auto max-w-[1400px] p-6">
-        <div className="mb-4 flex items-center gap-3">
-          <h1 className="text-2xl font-bold">Planning des gardes</h1>
-          {months.length > 0 && (
-            <select
-              className="w-44 rounded border border-gray-300 px-2 py-1.5 text-sm"
-              value={sel ? `${sel.year}-${sel.month}` : ''}
-              onChange={(e) => { const [y, m] = e.target.value.split('-').map(Number); setSel({ year: y, month: m }); }}
-            >
-              {months.map((m) => <option key={`${m.year}-${m.month}`} value={`${m.year}-${m.month}`}>{MONTHS_FR[m.month - 1]} {m.year}</option>)}
-            </select>
-          )}
-        </div>
+      <main className="w-full p-6">
+        <h1 className="mb-3 text-2xl font-bold">Planning des gardes</h1>
+        {months.length > 0 && sel && (
+          <div className="mb-4 flex items-center gap-2">
+            <button disabled={idx <= 0} onClick={() => setSel(months[idx - 1])}
+              className="w-10 rounded border border-gray-300 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-40">‹</button>
+            <span className="inline-block w-52 text-center text-lg font-semibold">{MONTHS_FR[sel.month - 1]} {sel.year}</span>
+            <button disabled={idx >= months.length - 1} onClick={() => setSel(months[idx + 1])}
+              className="w-10 rounded border border-gray-300 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-40">›</button>
+          </div>
+        )}
 
         {months.length === 0 ? (
           <p className="text-sm text-gray-400">Aucun planning publié pour l&apos;instant.</p>
