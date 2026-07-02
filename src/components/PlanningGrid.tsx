@@ -43,13 +43,15 @@ export default function PlanningGrid({
             <tr key={doc}>
               <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">{doc}</td>
               {days.map((d) => {
-                const post = grid[doc]?.[d.day];
-                const m = meetings(d.weekday, post);
+                const raw = grid[doc]?.[d.day];
+                const [main, evening] = raw ? raw.split('+') : [undefined, undefined]; // 'ACU+G2' = ACU jour + G2 soir
+                const m = meetings(d.weekday, main);
+                const afternoon = evening ? `${evening} 18h` : m.afternoon;
                 return (
-                  <td key={d.day} className={`h-12 border border-gray-100 px-0.5 align-middle ${postStyle(post)}`}>
+                  <td key={d.day} className={`h-12 border border-gray-100 px-0.5 align-middle ${postStyle(raw)}`}>
                     <div className="text-[8px] leading-none text-gray-600/70">{m.morning || ' '}</div>
-                    <div className="text-[11px] font-medium leading-tight">{post ?? ''}</div>
-                    <div className="text-[8px] leading-none text-gray-600/70">{m.afternoon || ' '}</div>
+                    <div className="text-[11px] font-medium leading-tight">{main ?? ''}</div>
+                    <div className="text-[8px] leading-none text-gray-600/70">{afternoon || ' '}</div>
                   </td>
                 );
               })}

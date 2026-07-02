@@ -73,6 +73,7 @@ export function saveAvailability(year: number, month: number, avail: MonthAvaila
 
 /** Tailwind classes for each post acronym, for the planning grid. */
 export function postStyle(post: string | undefined): string {
+  if (post && post.startsWith('ACU')) return 'bg-lime-100 text-lime-700'; // 'ACU' or 'ACU+G2'
   switch (post) {
     case 'G1':
       return 'bg-red-600 text-white font-semibold';

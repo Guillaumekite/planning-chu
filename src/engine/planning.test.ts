@@ -37,18 +37,22 @@ describe('solvePlanning — gardes & structure', () => {
     }
   });
 
-  it('gives ACU to an acupuncture doctor every Monday they are present', async () => {
+  it('gives ACU on Mondays (plain or ACU+G2 evening garde), never G1, and only to the acu doctor', async () => {
     const docs = doctors(12);
     const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D02: { acupuncture: true } } });
     if (res.status !== 'feasible') throw new Error('expected feasible');
     let acu = 0;
     for (const cd of res.days) {
-      if (cd.weekday === 0 && res.grid.D02[cd.day] === 'ACU') acu++;
+      if (cd.weekday !== 0) continue; // Monday
+      const p = res.grid.D02[cd.day];
+      if (p && p.startsWith('ACU')) acu++;
+      // On a Monday, the acu doctor is never on G1 (a Monday garde must be G2 / ACU+G2).
+      expect(p).not.toBe('G1');
     }
     expect(acu).toBeGreaterThan(0);
     // No other doctor ever gets ACU.
     for (const cd of res.days) for (const doc of docs.filter((d) => d !== 'D02')) {
-      expect(res.grid[doc][cd.day]).not.toBe('ACU');
+      expect((res.grid[doc][cd.day] ?? '').startsWith('ACU')).toBe(false);
     }
   });
 

@@ -131,16 +131,15 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     if (wd.length) wishes[doc] = [...new Set([...(wishes[doc] ?? []), ...wd])];
   }
 
-  // Acupuncture doctors keep their Mondays free for ACU — so they're also kept off garde on
-  // Mondays AND Sundays (a Sunday garde would force a Monday rest), guaranteeing ACU every Monday.
+  // Acupuncture doctors do ACU on Mondays but stay normal for garde eligibility. If the schedule
+  // puts one on a Monday garde, it must be G2 (evening from 18h) — see the G2-forcing step below.
   const acupuncture = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acupuncture));
-  const acuBlocked = (doc: DoctorId, cd: CalendarDay) => acupuncture.has(doc) && (cd.weekday === 0 || cd.weekday === 6);
 
-  // A garde is blocked unless the doctor is garde-available that day (and not on a TP / ACU day).
+  // A garde is blocked unless the doctor is garde-available that day (and not on a TP day).
   const gardeBlocked: Record<DoctorId, number[]> = {};
   for (const doc of doctors) {
     const blocked: number[] = [];
-    for (const cd of days) if (!GARDEABLE(avail(input, doc, cd.day)) || tpDays[doc].has(cd.day) || acuBlocked(doc, cd)) blocked.push(cd.day);
+    for (const cd of days) if (!GARDEABLE(avail(input, doc, cd.day)) || tpDays[doc].has(cd.day)) blocked.push(cd.day);
     if (blocked.length) gardeBlocked[doc] = blocked;
   }
 
@@ -162,6 +161,16 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
   const gardeByDay: Record<number, { G1?: DoctorId; G2?: DoctorId }> = {};
   for (const a of gardes.assignments) (gardeByDay[a.day] ??= {})[a.role] = a.doctorId;
+
+  // If an acupuncture doctor lands on a MONDAY garde, make it the G2 (evening garde from 18h):
+  // he does ACU during the day and takes G2 in the evening (G1 would be a full day, impossible).
+  for (const cd of days) {
+    if (cd.weekday !== 0) continue; // Monday
+    const g = gardeByDay[cd.day];
+    if (g?.G1 && acupuncture.has(g.G1)) {
+      const tmp = g.G1; g.G1 = g.G2; g.G2 = tmp; // swap roles (both are 24h garde slots)
+    }
+  }
 
   const grid: Record<DoctorId, Record<number, string>> = {};
   for (const doc of doctors) grid[doc] = {};
@@ -206,11 +215,13 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     for (const doc of doctors) if (isRS(doc, cd.day) && !grid[doc][cd.day]) grid[doc][cd.day] = 'RS';
   }
 
-  // Acupuncture: dedicated doctors get ACU every Monday they're present (priority post).
+  // Acupuncture on Mondays. If the doctor is also on the G2 garde that Monday, he does ACU in the
+  // day AND the garde in the evening → 'ACU+G2'. Otherwise (present, not garde/RS) → plain 'ACU'.
   for (const cd of days) {
     if (cd.weekday !== 0) continue; // Monday = 0
     for (const doc of acupuncture) {
-      if (isPresent(doc, cd.day) && !grid[doc][cd.day]) grid[doc][cd.day] = 'ACU';
+      if (grid[doc][cd.day] === 'G2') grid[doc][cd.day] = 'ACU+G2';
+      else if (isPresent(doc, cd.day) && !grid[doc][cd.day]) grid[doc][cd.day] = 'ACU';
     }
   }
 
