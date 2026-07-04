@@ -50,6 +50,8 @@ export interface PlanningInput {
   profiles?: Record<DoctorId, DoctorProfile>;
   holidays?: number[];
   wishes?: Record<DoctorId, number[]>;
+  /** Whether ACU (acupuncture) scheduling is active for this planning. Default true. */
+  acupuncture?: boolean;
 }
 
 export type PlanningResult =
@@ -162,13 +164,14 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const gardeByDay: Record<number, { G1?: DoctorId; G2?: DoctorId }> = {};
   for (const a of gardes.assignments) (gardeByDay[a.day] ??= {})[a.role] = a.doctorId;
 
-  // If an acupuncture doctor lands on a MONDAY garde, make it the G2 (evening garde from 18h):
-  // he does ACU during the day and takes G2 in the evening (G1 would be a full day, impossible).
+  const acuOn = input.acupuncture !== false; // acupuncture scheduling active for this planning
+
+  // Permanent rule: the acupuncture doctor (Dr Dzierzek) is NEVER G1 — always G2. Whenever she's
+  // on a garde (any day), make it the G2 (both are 24h slots, just different bloc labels).
   for (const cd of days) {
-    if (cd.weekday !== 0) continue; // Monday
     const g = gardeByDay[cd.day];
     if (g?.G1 && acupuncture.has(g.G1)) {
-      const tmp = g.G1; g.G1 = g.G2; g.G2 = tmp; // swap roles (both are 24h garde slots)
+      const tmp = g.G1; g.G1 = g.G2; g.G2 = tmp;
     }
   }
 
@@ -178,6 +181,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // Compensation off (récup) for weekend gardes whose RS falls on a non-working day.
   // Team ≥ 12 active → Saturday-garde doctors get the FOLLOWING Monday off.
   // Team > 12 active → Friday-garde doctors also get the following Monday off.
+  // Exception: an acupuncture doctor is NOT compensated (she keeps her Monday ACU).
   const teamSize = doctors.length;
   const compOff = new Set<string>(); // `${doctor}|${day}`
   if (teamSize >= 12) {
@@ -190,7 +194,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       const mondayDay = cd.day + (isSat ? 2 : 3); // Sat→+2, Fri→+3 lands on Monday
       const md = days.find((x) => x.day === mondayDay);
       if (!md || md.weekday !== 0) continue;
-      for (const doc of [g.G1, g.G2]) if (doc) compOff.add(`${doc}|${mondayDay}`);
+      for (const doc of [g.G1, g.G2]) if (doc && !(acuOn && acupuncture.has(doc))) compOff.add(`${doc}|${mondayDay}`);
     }
   }
 
@@ -215,13 +219,29 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     for (const doc of doctors) if (isRS(doc, cd.day) && !grid[doc][cd.day]) grid[doc][cd.day] = 'RS';
   }
 
-  // Acupuncture on Mondays. If the doctor is also on the G2 garde that Monday, he does ACU in the
-  // day AND the garde in the evening → 'ACU+G2'. Otherwise (present, not garde/RS) → plain 'ACU'.
-  for (const cd of days) {
-    if (cd.weekday !== 0) continue; // Monday = 0
+  // Acupuncture (Mondays + Wednesdays). If on the G2 garde that day → 'ACU+G2' (ACU in the day,
+  // garde from 18h); those days need MS maternity cover until 18h (tracked in acuG2Days).
+  // Wednesday exception: if she's on garde Tuesday (→ Wednesday RS), acupuncture moves to Thursday.
+  const acuG2Days = new Set<number>();
+  const placeAcu = (doc: DoctorId, day: number) => {
+    if (grid[doc][day] === 'G2') { grid[doc][day] = 'ACU+G2'; acuG2Days.add(day); }
+    else if (isPresent(doc, day) && !grid[doc][day]) grid[doc][day] = 'ACU';
+  };
+  if (acuOn) {
     for (const doc of acupuncture) {
-      if (grid[doc][cd.day] === 'G2') grid[doc][cd.day] = 'ACU+G2';
-      else if (isPresent(doc, cd.day) && !grid[doc][cd.day]) grid[doc][cd.day] = 'ACU';
+      for (const cd of days) {
+        if (cd.weekday === 0) {
+          placeAcu(doc, cd.day); // Monday
+        } else if (cd.weekday === 2) {
+          if (isGarde(doc, cd.day - 1)) {
+            // Tuesday garde → Wednesday RS → move ACU to Thursday.
+            const thu = days.find((x) => x.day === cd.day + 1 && x.weekday === 3);
+            if (thu) placeAcu(doc, thu.day);
+          } else {
+            placeAcu(doc, cd.day); // Wednesday
+          }
+        }
+      }
     }
   }
 
@@ -269,7 +289,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     // and are distributed across ALL present doctors (no dedicated specialists).
     const wanted: string[] = [];
     if (PED_DAYS.has(cd.weekday)) wanted.push('Ped'); // pédiatrie lun/mer/jeu/ven
-    wanted.push('MM'); // maternité
+    // Maternité : MS (jusqu'à 18h) les jours où le médecin acupuncture prend la G2 à 18h ; sinon MM.
+    wanted.push(acuG2Days.has(cd.day) ? 'MS' : 'MM');
     if (presentCount >= 9) wanted.push('CD'); // consultation douleur si effectif suffisant
     wanted.push('S', 'CS1', 'BM', 'CS2', 'BM', 'BM');
     if (presentCount >= 10) wanted.push('P'); // présence quand l'effectif est large

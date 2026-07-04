@@ -56,6 +56,25 @@ describe('solvePlanning — gardes & structure', () => {
     }
   });
 
+  it('places ACU on Wednesdays too, and never puts the acu doctor on G1 any day', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D02: { acupuncture: true } } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    let wed = 0;
+    for (const cd of res.days) if (cd.weekday === 2 && (res.grid.D02[cd.day] ?? '').startsWith('ACU')) wed++;
+    expect(wed).toBeGreaterThan(0);
+    for (const cd of res.days) expect(res.grid.D02[cd.day]).not.toBe('G1'); // never G1
+  });
+
+  it('disables ACU entirely when the acupuncture flag is off', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D02: { acupuncture: true } }, acupuncture: false });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    for (const cd of res.days) for (const doc of docs) {
+      expect((res.grid[doc][cd.day] ?? '').startsWith('ACU')).toBe(false);
+    }
+  });
+
   it('compensates Saturday gardes with the following Monday off when team ≥ 12', async () => {
     const docs = doctors(12);
     const res = await solvePlanning({ year: 2026, month: 4, doctors: docs });

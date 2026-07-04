@@ -89,6 +89,8 @@ export function postStyle(post: string | undefined): string {
       return 'bg-rose-100 text-rose-700';
     case 'MM':
       return 'bg-cyan-100 text-cyan-700';
+    case 'MS':
+      return 'bg-teal-100 text-teal-700';
     case 'CD':
       return 'bg-fuchsia-100 text-fuchsia-700';
     case 'ACU':

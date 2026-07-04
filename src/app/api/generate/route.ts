@@ -21,6 +21,7 @@ const BodySchema = z.object({
   holidays: z.array(z.number().int().min(1).max(31)).optional(),
   availability: z.record(z.string(), z.record(z.string(), AvailEnum)).optional(),
   profiles: z.record(z.string(), ProfileSchema).optional(),
+  acupuncture: z.boolean().optional(),
   wishes: z.record(z.string(), z.array(z.number().int().min(1).max(31))).optional(),
 });
 
@@ -59,6 +60,7 @@ export async function POST(req: Request) {
       wishes: input.wishes,
       availability,
       profiles: input.profiles,
+      acupuncture: input.acupuncture,
     });
     return NextResponse.json(result);
   } catch (e) {

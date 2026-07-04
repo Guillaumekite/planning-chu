@@ -27,6 +27,7 @@ export default function AdminClient() {
   const [month, setMonth] = useState(4);
   const [newName, setNewName] = useState('');
   const [holidays, setHolidays] = useState('');
+  const [acuOn, setAcuOn] = useState(true);
   const [result, setResult] = useState<GenResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [credential, setCredential] = useState<{ name: string; password: string } | null>(null);
@@ -105,7 +106,7 @@ export default function AdminClient() {
     try {
       const res = await fetch('/api/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, month, doctors: active.map((d) => d.name), availability, profiles, holidays: parseDays(holidays) }),
+        body: JSON.stringify({ year, month, doctors: active.map((d) => d.name), availability, profiles, holidays: parseDays(holidays), acupuncture: acuOn }),
       });
       setResult((await res.json()) as GenResult);
     } catch (e) {
@@ -215,6 +216,9 @@ export default function AdminClient() {
           <button onClick={() => shiftMonth(1)} className="w-10 rounded border border-gray-300 py-1.5 text-sm hover:bg-gray-50">›</button>
           <label className="ml-4 text-sm">Jours fériés
             <input className="ml-2 w-36 rounded border border-gray-300 px-2 py-2" placeholder="ex : 1, 8" value={holidays} onChange={(e) => setHolidays(e.target.value)} />
+          </label>
+          <label className="ml-2 flex items-center gap-1.5 text-sm">
+            <input type="checkbox" checked={acuOn} onChange={(e) => setAcuOn(e.target.checked)} /> Acupuncture
           </label>
           <button onClick={generate} disabled={loading} className="rounded bg-green-600 px-5 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
             {loading ? 'Calcul…' : 'Générer le planning'}
