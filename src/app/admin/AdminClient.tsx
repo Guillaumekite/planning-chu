@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { MONTHS_FR } from '@/lib/store';
-import PlanningGrid from '@/components/PlanningGrid';
+import PlanningGrid, { type GridDay } from '@/components/PlanningGrid';
+import { weekdayOf, daysInMonth } from '@/engine/calendar';
 
 type Doctor = {
   id: number; name: string; universitaire: boolean; university_ratio: number;
@@ -15,9 +16,23 @@ type GenResult =
   | { status: 'feasible'; days: ApiDay[]; grid: Record<string, Record<number, string>>; gardeEquity: Equity }
   | { status: 'infeasible'; day: number; reason: string; eligible: string[] }
   | { error: string };
+// A published planning as returned by GET /api/plannings (snake_case column names).
+type PublishedPlanning = { days: ApiDay[]; grid: Record<string, Record<number, string>>; garde_equity: Equity | null };
 
 function parseDays(s: string): number[] {
   return s.split(/[,\s]+/).map((x) => parseInt(x, 10)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 31);
+}
+
+// Calendar days for an empty preview grid (no assignments), so a non-published month still renders.
+function emptyDays(year: number, month: number, holidays: number[]): GridDay[] {
+  const hs = new Set(holidays);
+  const n = daysInMonth(year, month);
+  const days: GridDay[] = [];
+  for (let day = 1; day <= n; day++) {
+    const weekday = weekdayOf(year, month, day);
+    days.push({ day, weekday, isWeekend: weekday === 5 || weekday === 6, isHoliday: hs.has(day) });
+  }
+  return days;
 }
 
 export default function AdminClient() {
@@ -31,6 +46,8 @@ export default function AdminClient() {
   const [result, setResult] = useState<GenResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [credential, setCredential] = useState<{ name: string; password: string } | null>(null);
+  const [publishMsg, setPublishMsg] = useState('');
+  const [publishedPlanning, setPublishedPlanning] = useState<PublishedPlanning | null>(null);
 
   const loadDoctors = useCallback(async () => {
     const res = await fetch('/api/doctors');
@@ -40,9 +57,18 @@ export default function AdminClient() {
     const res = await fetch(`/api/roster?year=${year}&month=${month}`);
     if (res.ok) setRosterIds(new Set((await res.json()).doctorIds));
   }, [year, month]);
+  const loadPublished = useCallback(async () => {
+    const res = await fetch(`/api/plannings?year=${year}&month=${month}`);
+    setPublishedPlanning(res.ok ? ((await res.json()).planning ?? null) : null);
+  }, [year, month]);
 
   useEffect(() => { loadDoctors(); }, [loadDoctors]);
   useEffect(() => { loadRoster(); }, [loadRoster]);
+  useEffect(() => { loadPublished(); }, [loadPublished]);
+
+  const published = !!publishedPlanning;
+  // A freshly generated (not yet published) draft for the current month, if any.
+  const draft = result && 'status' in result && result.status === 'feasible' ? result : null;
 
   const active = doctors.filter((d) => rosterIds.has(d.id));
 
@@ -50,6 +76,7 @@ export default function AdminClient() {
     let m = month + delta, y = year;
     if (m < 1) { m = 12; y -= 1; } else if (m > 12) { m = 1; y += 1; }
     setMonth(m); setYear(y);
+    setResult(null); setPublishMsg('');
   }
 
   async function addDoctor() {
@@ -123,7 +150,6 @@ export default function AdminClient() {
     } finally { setLoading(false); }
   }
 
-  const [publishMsg, setPublishMsg] = useState('');
   async function publish() {
     if (!result || !('status' in result) || result.status !== 'feasible') return;
     setPublishMsg('');
@@ -132,6 +158,8 @@ export default function AdminClient() {
       body: JSON.stringify({ year, month, grid: result.grid, days: result.days, gardeEquity: result.gardeEquity }),
     });
     setPublishMsg(res.ok ? '✓ Planning publié — consultable via le code d\'accès.' : 'Échec de la publication.');
+    // Reload from DB and drop the draft so the persistent published view (filled grid + export) takes over.
+    if (res.ok) { await loadPublished(); setResult(null); }
   }
 
   async function logout() {
@@ -243,44 +271,76 @@ export default function AdminClient() {
         </div>
       </section>
 
-      {result && 'status' in result && result.status === 'feasible' && (
-        <div className="mb-4 flex items-center gap-3">
-          <button onClick={publish} className="rounded bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700">Publier ce planning</button>
-          {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
+      {/* Planning du mois — toujours affiché : brouillon, publié (rempli), ou aperçu vide */}
+      <section className="mb-6 rounded-lg border border-gray-200 p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <h2 className="text-lg font-semibold">Planning — {MONTHS_FR[month - 1]} {year}</h2>
+          <span className={`rounded-full px-3 py-0.5 text-xs font-semibold ${published ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+            {published ? '● Publié' : '● Non publié'}
+          </span>
+          {published && (
+            <span className="ml-auto flex items-center gap-2 text-sm">
+              <span className="text-gray-500">Export :</span>
+              <a href={`/api/plannings/export?year=${year}&month=${month}&format=xlsx`} className="rounded border border-gray-300 px-3 py-1.5 font-medium hover:bg-gray-50">Excel (.xlsx)</a>
+              <a href={`/api/plannings/export?year=${year}&month=${month}&format=csv`} className="rounded border border-gray-300 px-3 py-1.5 font-medium hover:bg-gray-50">CSV</a>
+            </span>
+          )}
         </div>
-      )}
-      {result && <Result result={result} doctors={active.map((d) => d.name)} month={month} year={year} />}
+
+        {/* Erreurs éventuelles d'une génération */}
+        {result && 'error' in result && <Banner>{result.error}</Banner>}
+        {result && 'status' in result && result.status === 'infeasible' && (
+          <Banner><p className="font-semibold">Mois infaisable</p><p className="mt-1">{result.reason}</p><p className="mt-1 text-sm">Éligibles : {result.eligible.join(', ') || '—'}</p></Banner>
+        )}
+
+        {draft ? (
+          <div className="space-y-6">
+            <div className="flex items-center gap-3">
+              <button onClick={publish} className="rounded bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700">Publier ce planning</button>
+              {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
+              <span className="text-sm text-gray-500">Brouillon généré, non encore publié.</span>
+            </div>
+            <PlanningGrid days={draft.days} grid={draft.grid} doctors={active.map((d) => d.name)} />
+            <EquityTable equity={draft.gardeEquity} doctors={active.map((d) => d.name)} />
+          </div>
+        ) : publishedPlanning ? (
+          <div className="space-y-6">
+            <PlanningGrid days={publishedPlanning.days} grid={publishedPlanning.grid} doctors={publishedDoctors(publishedPlanning)} />
+            {publishedPlanning.garde_equity && <EquityTable equity={publishedPlanning.garde_equity} doctors={publishedDoctors(publishedPlanning)} />}
+          </div>
+        ) : (
+          <div>
+            <p className="mb-2 text-sm text-gray-500">Aucun planning publié pour ce mois — aperçu vide. Génère puis publie pour le remplir.</p>
+            <PlanningGrid days={emptyDays(year, month, parseDays(holidays))} grid={{}} doctors={active.map((d) => d.name)} />
+          </div>
+        )}
+      </section>
     </main>
   );
 }
 
-function Result({ result, doctors, month, year }: { result: GenResult; doctors: string[]; month: number; year: number }) {
-  if ('error' in result) return <Banner>{result.error}</Banner>;
-  if (result.status === 'infeasible') {
-    return <Banner><p className="font-semibold">Mois infaisable</p><p className="mt-1">{result.reason}</p><p className="mt-1 text-sm">Éligibles : {result.eligible.join(', ') || '—'}</p></Banner>;
-  }
+// Doctors of a published planning, sorted (fr) for a stable display order.
+function publishedDoctors(p: PublishedPlanning): string[] {
+  return Object.keys(p.grid).sort((a, b) => a.localeCompare(b, 'fr'));
+}
+
+function EquityTable({ equity, doctors }: { equity: Equity; doctors: string[] }) {
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="mb-2 text-lg font-semibold">Planning — {MONTHS_FR[month - 1]} {year}</h2>
-        <PlanningGrid days={result.days} grid={result.grid} doctors={doctors} />
-      </div>
-      <div>
-        <h2 className="mb-2 text-lg font-semibold">Équité des gardes (écart : {result.gardeEquity.spread})</h2>
-        <table className="text-sm">
-          <thead><tr className="border-b border-gray-300 text-left text-gray-500"><th className="py-1 pr-6">Médecin</th><th className="pr-6">Gardes</th><th className="pr-6">Week-ends</th><th>Jours pénibles</th></tr></thead>
-          <tbody>
-            {doctors.map((doc) => (
-              <tr key={doc} className="border-b border-gray-100">
-                <td className="py-1 pr-6 font-medium">{doc}</td>
-                <td className="pr-6">{result.gardeEquity.count[doc] ?? 0}</td>
-                <td className="pr-6">{result.gardeEquity.weekendCount[doc] ?? 0}</td>
-                <td>{result.gardeEquity.heavyCount[doc] ?? 0}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <div>
+      <h3 className="mb-2 text-lg font-semibold">Équité des gardes (écart : {equity.spread})</h3>
+      <table className="text-sm">
+        <thead><tr className="border-b border-gray-300 text-left text-gray-500"><th className="py-1 pr-6">Médecin</th><th className="pr-6">Gardes</th><th className="pr-6">Week-ends</th><th>Jours pénibles</th></tr></thead>
+        <tbody>
+          {doctors.map((doc) => (
+            <tr key={doc} className="border-b border-gray-100">
+              <td className="py-1 pr-6 font-medium">{doc}</td>
+              <td className="pr-6">{equity.count[doc] ?? 0}</td>
+              <td className="pr-6">{equity.weekendCount[doc] ?? 0}</td>
+              <td>{equity.heavyCount[doc] ?? 0}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

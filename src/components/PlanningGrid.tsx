@@ -1,21 +1,7 @@
 import { WEEKDAYS_FR, postStyle } from '@/lib/store';
+import { planningCell } from '@/lib/planning-cell';
 
 export type GridDay = { day: number; weekday: number; isWeekend: boolean; isHoliday: boolean };
-
-// Day-wide meetings that sit ON TOP of a doctor's main post (not posts themselves):
-//   Tuesday  → biblio (matin) + staff (après-midi)
-//   Wednesday→ réunion (après-midi)
-//   Friday   → staff (après-midi)
-// They only apply to doctors actually working a day post (not garde / RS / congé / off).
-const NOT_WORKING = new Set(['G1', 'G2', 'RS', 'CA', 'ABS', '']);
-
-function meetings(weekday: number, post: string | undefined): { morning: string; afternoon: string } {
-  if (!post || NOT_WORKING.has(post)) return { morning: '', afternoon: '' };
-  if (weekday === 1) return { morning: 'biblio', afternoon: 'staff' }; // mardi
-  if (weekday === 2) return { morning: '', afternoon: 'réunion' }; // mercredi
-  if (weekday === 4) return { morning: '', afternoon: 'staff' }; // vendredi
-  return { morning: '', afternoon: '' };
-}
 
 export default function PlanningGrid({
   days, grid, doctors,
@@ -44,13 +30,11 @@ export default function PlanningGrid({
               <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium whitespace-nowrap">{doc}</td>
               {days.map((d) => {
                 const raw = grid[doc]?.[d.day];
-                const [main, evening] = raw ? raw.split('+') : [undefined, undefined]; // 'ACU+G2' = ACU jour + G2 soir
-                const m = meetings(d.weekday, main);
-                const afternoon = evening ? `${evening} 18h` : m.afternoon;
+                const { morning, main, afternoon } = planningCell(d.weekday, raw);
                 return (
                   <td key={d.day} className={`h-12 border border-gray-100 px-0.5 align-middle ${postStyle(raw)}`}>
-                    <div className="text-[8px] leading-none text-gray-600/70">{m.morning || ' '}</div>
-                    <div className="text-[11px] font-medium leading-tight">{main ?? ''}</div>
+                    <div className="text-[8px] leading-none text-gray-600/70">{morning || ' '}</div>
+                    <div className="text-[11px] font-medium leading-tight">{main}</div>
                     <div className="text-[8px] leading-none text-gray-600/70">{afternoon || ' '}</div>
                   </td>
                 );
