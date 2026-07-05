@@ -12,6 +12,7 @@ const ProfileSchema = z.object({
   universityRatio: z.number().min(0).max(100).optional(),
   fte: z.number().min(0).max(1).optional(),
   acupuncture: z.boolean().optional(),
+  douleurPoids: z.number().int().min(0).max(2).optional(),
 });
 
 const BodySchema = z.object({

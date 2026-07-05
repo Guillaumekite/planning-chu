@@ -40,6 +40,8 @@ export interface DoctorProfile {
   fte?: number;
   /** This doctor does acupuncture (post ACU) every Monday when present (e.g. Dr Dzierzek). */
   acupuncture?: boolean;
+  /** Consultation douleur (CD) weight: 0 = not eligible (default), 1 = simple, 2 = double (Esbuy). */
+  douleurPoids?: number;
 }
 
 export interface PlanningInput {
@@ -116,6 +118,10 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
   const fte: Record<DoctorId, number> = {};
   for (const doc of doctors) fte[doc] = input.profiles?.[doc]?.fte ?? 1;
+
+  // Consultation douleur (CD) eligibility & weight per doctor: 0 = not eligible, 1 = simple, 2 = double.
+  const douleurPoids: Record<DoctorId, number> = {};
+  for (const doc of doctors) douleurPoids[doc] = input.profiles?.[doc]?.douleurPoids ?? 0;
 
   // Part-time off days (TP): part-timers don't work every day — ~fte of their present weekdays,
   // in a 3/2-style weekly alternation. Those off days get no post and look like any day off.
@@ -281,13 +287,28 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
         return ca !== cb ? ca - cb : a.localeCompare(b);
       })[0];
 
+    // Consultation douleur (CD) — RESERVED to doctors with a douleur profile (douleurPoids ≥ 1).
+    // Esbuy (poids 2) does ~2× the others: we pick the eligible present doctor with the lowest
+    // CD-count PER unit of weight, so a poids-2 doctor is chosen about twice as often. Still gated by
+    // effectif ≥ 9; if no eligible doctor is present that day, CD is simply not covered.
+    if (presentCount >= 9) {
+      const cdCandidates = pool.filter((doc) => douleurPoids[doc] >= 1);
+      if (cdCandidates.length) {
+        const doc = [...cdCandidates].sort((a, b) => {
+          const ra = (postCount[a]['CD'] ?? 0) / douleurPoids[a];
+          const rb = (postCount[b]['CD'] ?? 0) / douleurPoids[b];
+          return ra !== rb ? ra - rb : a.localeCompare(b);
+        })[0];
+        assign(doc, 'CD');
+      }
+    }
+
     // Required posts for the day, in priority order. Specials apply by day rule / headcount,
     // and are distributed across ALL present doctors (no dedicated specialists).
     const wanted: string[] = [];
     if (PED_DAYS.has(cd.weekday)) wanted.push('Ped'); // pédiatrie lun/mer/jeu/ven
     // Maternité : MS (jusqu'à 18h) les jours où le médecin acupuncture prend la G2 à 18h ; sinon MM.
     wanted.push(acuG2Days.has(cd.day) ? 'MS' : 'MM');
-    if (presentCount >= 9) wanted.push('CD'); // consultation douleur si effectif suffisant
     wanted.push('S', 'CS1', 'BM', 'CS2', 'BM', 'BM');
     if (presentCount >= 10) wanted.push('P'); // présence quand l'effectif est large
 

@@ -17,6 +17,7 @@ const PatchBody = z.object({
   part_time: z.boolean().optional(),
   part_time_ratio: z.number().min(0).max(100).optional(),
   acupuncture: z.boolean().optional(),
+  douleur_poids: z.number().int().min(0).max(2).optional(),
   password: z.string().min(1).optional(), // (re)set the doctor's login password
   username: z.string().min(1).optional(),
   generatePassword: z.boolean().optional(), // auto-generate and return a new password

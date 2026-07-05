@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS doctors (
 );
 
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS acupuncture boolean NOT NULL DEFAULT false;
+-- Consultation douleur (CD) weight: 0 = not eligible, 1 = simple, 2 = double (Esbuy).
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS douleur_poids integer NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS users (
   id                   serial PRIMARY KEY,

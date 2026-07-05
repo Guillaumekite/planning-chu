@@ -163,13 +163,58 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
   });
 
   it('CD appears with ≥9 present but not with a small roster', async () => {
-    const big = await solvePlanning({ year: 2026, month: 4, doctors: doctors(12) });
-    const small = await solvePlanning({ year: 2026, month: 4, doctors: doctors(8) });
+    const profiles = { D01: { douleurPoids: 1 }, D02: { douleurPoids: 1 } };
+    const big = await solvePlanning({ year: 2026, month: 4, doctors: doctors(12), profiles });
+    const small = await solvePlanning({ year: 2026, month: 4, doctors: doctors(8), profiles });
     if (big.status !== 'feasible' || small.status !== 'feasible') throw new Error('expected feasible');
     const cdBig = big.days.reduce((s, cd) => s + doctors(12).filter((d) => big.grid[d][cd.day] === 'CD').length, 0);
     const cdSmall = small.days.reduce((s, cd) => s + doctors(8).filter((d) => small.grid[d][cd.day] === 'CD').length, 0);
     expect(cdBig).toBeGreaterThan(0);
     expect(cdSmall).toBe(0);
+  });
+
+  it('assigns CD only to doctors with douleurPoids ≥ 1', async () => {
+    const docs = doctors(14);
+    const profiles: Record<string, DoctorProfile> = { D01: { douleurPoids: 2 }, D02: { douleurPoids: 1 }, D03: { douleurPoids: 1 } };
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const eligible = new Set(['D01', 'D02', 'D03']);
+    let cdTotal = 0;
+    for (const cd of res.days) for (const doc of docs) {
+      if (res.grid[doc][cd.day] === 'CD') { cdTotal++; expect(eligible.has(doc)).toBe(true); }
+    }
+    expect(cdTotal).toBeGreaterThan(0);
+  });
+
+  it('gives Esbuy (douleurPoids 2) about twice the CD of a douleurPoids-1 doctor', async () => {
+    const docs = doctors(16);
+    const profiles: Record<string, DoctorProfile> = {
+      D01: { douleurPoids: 2 }, D02: { douleurPoids: 1 }, D03: { douleurPoids: 1 },
+      D04: { douleurPoids: 1 }, D05: { douleurPoids: 1 },
+    };
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const cdCount = (doc: string) => res.days.filter((c) => res.grid[doc][c.day] === 'CD').length;
+    const esbuy = cdCount('D01');
+    const others = ['D02', 'D03', 'D04', 'D05'].map(cdCount);
+    const avgOther = others.reduce((s, v) => s + v, 0) / others.length;
+    expect(esbuy).toBeGreaterThanOrEqual(Math.max(...others));
+    expect(esbuy / avgOther).toBeGreaterThan(1.5);
+    expect(esbuy / avgOther).toBeLessThan(2.6);
+  });
+
+  it('leaves CD uncovered on days when no douleur doctor is present', async () => {
+    const docs = doctors(12);
+    const conge: Record<number, 'conge'> = {};
+    for (let d = 1; d <= 30; d++) conge[d] = 'conge';
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { douleurPoids: 1 } }, availability: { D01: conge },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    let cdTotal = 0;
+    for (const cd of res.days) for (const doc of docs) if (res.grid[doc][cd.day] === 'CD') cdTotal++;
+    expect(cdTotal).toBe(0);
   });
 
   it('P appears with ≥10 present but not with a small roster', async () => {
