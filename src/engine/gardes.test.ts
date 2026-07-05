@@ -158,6 +158,19 @@ describe('solveGardes — G1/G2 role balancing (intra-month)', () => {
       expect(today.map((a) => a.role).sort()).toEqual(['G1', 'G2']);
     }
   });
+
+  it('still balances every OTHER doctor to |G1−G2| ≤ 1 despite a forceG2 doctor', async () => {
+    const docs = doctors(14);
+    const res = await solveGardes({ year: 2026, month: 4, doctors: docs, forceG2: ['D01'] });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const g1: Record<string, number> = {}, g2: Record<string, number> = {};
+    for (const a of res.assignments) (a.role === 'G1' ? g1 : g2)[a.doctorId] = ((a.role === 'G1' ? g1 : g2)[a.doctorId] ?? 0) + 1;
+    for (const doc of docs.slice(1)) { // skip the forced doctor
+      if (((g1[doc] ?? 0) + (g2[doc] ?? 0)) < 2) continue;
+      expect(Math.abs((g1[doc] ?? 0) - (g2[doc] ?? 0))).toBeLessThanOrEqual(1);
+    }
+  });
 });
 
 describe('solveGardes — determinism', () => {
