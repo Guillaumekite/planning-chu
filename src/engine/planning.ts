@@ -157,6 +157,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const gardeInput: GardeInput = {
     year: input.year, month: input.month, doctors,
     gardeBlocked, holidays: input.holidays, wishes, fte: gardeWeight,
+    // Acupuncture doctors are ALWAYS G2, never G1 (permanent rule) — handled by the role balancer.
+    forceG2: [...acupuncture],
   };
   const gardes = await solveGardes(gardeInput);
   if (gardes.status === 'infeasible') return gardes;
@@ -166,14 +168,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
   const acuOn = input.acupuncture !== false; // acupuncture scheduling active for this planning
 
-  // Permanent rule: the acupuncture doctor (Dr Dzierzek) is NEVER G1 — always G2. Whenever she's
-  // on a garde (any day), make it the G2 (both are 24h slots, just different bloc labels).
-  for (const cd of days) {
-    const g = gardeByDay[cd.day];
-    if (g?.G1 && acupuncture.has(g.G1)) {
-      const tmp = g.G1; g.G1 = g.G2; g.G2 = tmp;
-    }
-  }
+  // Permanent rule "acupuncture doctor is always G2, never G1" is now enforced upstream by the garde
+  // role balancer (via `forceG2` above), so no post-hoc swap is needed here.
 
   const grid: Record<DoctorId, Record<number, string>> = {};
   for (const doc of doctors) grid[doc] = {};

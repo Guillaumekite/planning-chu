@@ -126,6 +126,40 @@ describe('solveGardes — infeasibility is first-class', () => {
   });
 });
 
+describe('solveGardes — G1/G2 role balancing (intra-month)', () => {
+  it('alternates G1/G2 for each doctor with ≥2 gardes (|G1−G2| ≤ 1)', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(14) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const g1: Record<string, number> = {};
+    const g2: Record<string, number> = {};
+    for (const a of res.assignments) {
+      if (a.role === 'G1') g1[a.doctorId] = (g1[a.doctorId] ?? 0) + 1;
+      else g2[a.doctorId] = (g2[a.doctorId] ?? 0) + 1;
+    }
+    for (const doc of doctors(14)) {
+      const total = (g1[doc] ?? 0) + (g2[doc] ?? 0);
+      if (total < 2) continue;
+      expect(Math.abs((g1[doc] ?? 0) - (g2[doc] ?? 0))).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('keeps a forceG2 doctor always in G2 (never G1)', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(14), forceG2: ['D01'] });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const d01 = res.assignments.filter((a) => a.doctorId === 'D01');
+    expect(d01.length).toBeGreaterThan(0);
+    expect(d01.every((a) => a.role === 'G2')).toBe(true);
+    // Still exactly one G1 + one G2 each day.
+    const n = daysInMonth(2026, 4);
+    for (let day = 1; day <= n; day++) {
+      const today = res.assignments.filter((a) => a.day === day);
+      expect(today.map((a) => a.role).sort()).toEqual(['G1', 'G2']);
+    }
+  });
+});
+
 describe('solveGardes — determinism', () => {
   it('produces identical output for identical input', async () => {
     const input: GardeInput = {

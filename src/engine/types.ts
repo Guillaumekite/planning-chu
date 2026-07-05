@@ -53,6 +53,8 @@ export interface GardeInput {
   wishes?: Record<DoctorId, number[]>;
   /** Per doctor: full-time-equivalent fraction (0-1). Part-timers get proportionally fewer gardes. Default 1. */
   fte?: Record<DoctorId, number>;
+  /** Doctors that must ALWAYS be G2 (never G1) when on garde — e.g. the acupuncture doctor. */
+  forceG2?: DoctorId[];
   weights?: Partial<GardeWeights>;
   /** Solver time budget per month (seconds). Default 6. */
   timeLimitSec?: number;
