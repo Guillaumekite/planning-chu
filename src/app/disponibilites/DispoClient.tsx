@@ -6,9 +6,12 @@ import { MONTHS_FR, WEEKDAYS_FR, AVAIL_STATES, AVAIL_INFO, type Availability } f
 import { buildMonth } from '@/engine/calendar';
 import { DEFAULT_WEIGHTS } from '@/engine/types';
 
-type Doc = { id: number; name: string };
+type Doc = { id: number; name: string; universitaire: boolean };
 type Avail = Record<string, Record<number, Availability>>;
 type Conge = Record<string, Record<number, string>>;
+type UnivMap = Record<string, Record<number, boolean>>;
+/** The garde-preference palette states plus the orthogonal "univ" toggle brush. */
+type Brush = Availability | 'univ';
 
 export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; doctorId: number | null }) {
   const [doctors, setDoctors] = useState<Doc[]>([]);
@@ -17,38 +20,63 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   const [saved, setSaved] = useState<Avail>({});
   const [pending, setPending] = useState<Avail>({});
   const [conge, setConge] = useState<Conge>({});
-  const [brush, setBrush] = useState<Availability>('souhait_garde');
+  const [savedUniv, setSavedUniv] = useState<UnivMap>({});
+  const [pendingUniv, setPendingUniv] = useState<UnivMap>({});
+  const [brush, setBrush] = useState<Brush>('souhait_garde');
   const [savedMsg, setSavedMsg] = useState('');
 
   useEffect(() => {
     fetch('/api/doctors').then((r) => (r.ok ? r.json() : { doctors: [] })).then((d) => {
-      const all: Doc[] = (d.doctors ?? []).map((x: Doc) => ({ id: x.id, name: x.name }));
+      const all: Doc[] = (d.doctors ?? []).map((x: { id: number; name: string; universitaire?: boolean }) =>
+        ({ id: x.id, name: x.name, universitaire: !!x.universitaire }));
       setDoctors(isAdmin ? all : all.filter((x) => x.id === doctorId));
     });
   }, [isAdmin, doctorId]);
 
   const loadAvail = useCallback(async () => {
     const r = await fetch(`/api/availability?year=${year}&month=${month}`);
-    if (r.ok) { const d = await r.json(); setSaved(d.availability ?? {}); setPending(d.availability ?? {}); setConge(d.congeStatus ?? {}); }
+    if (r.ok) {
+      const d = await r.json();
+      setSaved(d.availability ?? {}); setPending(d.availability ?? {}); setConge(d.congeStatus ?? {});
+      setSavedUniv(d.univ ?? {}); setPendingUniv(d.univ ?? {});
+    }
   }, [year, month]);
   useEffect(() => { loadAvail(); }, [loadAvail]);
 
   const days = buildMonth(year, month, DEFAULT_WEIGHTS, []);
-  const dirty = JSON.stringify(saved) !== JSON.stringify(pending);
+  const dirty = JSON.stringify(saved) !== JSON.stringify(pending) || JSON.stringify(savedUniv) !== JSON.stringify(pendingUniv);
   const stateOf = (name: string, day: number): Availability => pending[name]?.[day] ?? 'dispo';
+  const univOf = (name: string, day: number): boolean => !!pendingUniv[name]?.[day];
+  const hasUniversitaire = doctors.some((d) => d.universitaire);
 
   function cellLook(name: string, day: number): { label: string; cls: string } {
     const st = stateOf(name, day);
+    const u = univOf(name, day) && st !== 'conge'; // congé can't also be a fac day
+    let base: { label: string; cls: string };
     if (st === 'conge') {
       const status = conge[name]?.[day];
-      if (status === 'approved') return { label: 'Congé', cls: 'bg-green-300 text-green-900' };
-      if (status === 'refused') return { label: 'Congé', cls: 'bg-red-300 text-red-900 line-through' };
+      if (status === 'approved') base = { label: 'Congé', cls: 'bg-green-300 text-green-900' };
+      else if (status === 'refused') base = { label: 'Congé', cls: 'bg-red-300 text-red-900 line-through' };
+      else base = { label: AVAIL_INFO[st].label, cls: AVAIL_INFO[st].cls };
+    } else {
+      base = { label: AVAIL_INFO[st].label, cls: AVAIL_INFO[st].cls };
     }
-    return { label: AVAIL_INFO[st].label, cls: AVAIL_INFO[st].cls };
+    // Univ is an ORTHOGONAL marker: keep the garde-preference background, add an indigo ring, and
+    // show 'U' when there's no other label (so "G+ and U" reads as G+ with an indigo ring).
+    if (u) return { label: base.label || 'U', cls: `${base.cls} ring-2 ring-inset ring-indigo-500` };
+    return base;
   }
 
   function apply(name: string, day: number) {
     setSavedMsg('');
+    if (brush === 'univ') {
+      setPendingUniv((p) => {
+        const row = { ...(p[name] ?? {}) };
+        if (row[day]) delete row[day]; else row[day] = true;
+        return { ...p, [name]: row };
+      });
+      return;
+    }
     setPending((p) => {
       const row = { ...(p[name] ?? {}) };
       if (brush === 'dispo') delete row[day]; else row[day] = brush;
@@ -64,21 +92,27 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   }
 
   async function save() {
-    const names = new Set([...Object.keys(saved), ...Object.keys(pending)]);
-    const changes: { name: string; day: number; state: Availability }[] = [];
+    const names = new Set([
+      ...Object.keys(saved), ...Object.keys(pending), ...Object.keys(savedUniv), ...Object.keys(pendingUniv),
+    ]);
+    const changes: { name: string; day: number; state: Availability; univ: boolean }[] = [];
     for (const name of names) {
       const a = saved[name] ?? {}; const b = pending[name] ?? {};
-      const dayset = new Set([...Object.keys(a), ...Object.keys(b)].map(Number));
+      const su = savedUniv[name] ?? {}; const pu = pendingUniv[name] ?? {};
+      const dayset = new Set([...Object.keys(a), ...Object.keys(b), ...Object.keys(su), ...Object.keys(pu)].map(Number));
       for (const day of dayset) {
-        const before = a[day] ?? 'dispo'; const after = b[day] ?? 'dispo';
-        if (before !== after) changes.push({ name, day, state: after });
+        const beforeState = a[day] ?? 'dispo'; const afterState = b[day] ?? 'dispo';
+        const beforeUniv = !!su[day]; const afterUniv = !!pu[day];
+        if (beforeState !== afterState || beforeUniv !== afterUniv) {
+          changes.push({ name, day, state: afterState, univ: afterUniv });
+        }
       }
     }
     for (const c of changes) {
       const id = doctors.find((d) => d.name === c.name)?.id;
       await fetch('/api/availability', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, month, day: c.day, state: c.state, doctorId: isAdmin ? id : undefined }),
+        body: JSON.stringify({ year, month, day: c.day, state: c.state, univ: c.univ, doctorId: isAdmin ? id : undefined }),
       });
     }
     await loadAvail();
@@ -112,6 +146,12 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
             {AVAIL_INFO[s].label ? `${AVAIL_INFO[s].label} — ` : ''}{AVAIL_INFO[s].legend}
           </button>
         ))}
+        {hasUniversitaire && (
+          <button onClick={() => setBrush('univ')}
+            className={`rounded px-3 py-1.5 text-sm text-indigo-700 ${brush === 'univ' ? 'bg-indigo-100 ring-2 ring-blue-500' : 'bg-white ring-2 ring-inset ring-indigo-400'}`}>
+            U — Contrainte université (se combine avec G+/G−)
+          </button>
+        )}
       </div>
 
       {/* Tout est ancré à GAUCHE avec des largeurs fixes : rien ne se déplace selon la longueur
@@ -165,6 +205,12 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
         <span className="ml-1 rounded bg-green-300 px-1 text-green-900">validé</span> ou
         <span className="ml-1 rounded bg-red-300 px-1 text-red-900">refusé</span> par l&apos;admin (après enregistrement).
       </p>
+      {hasUniversitaire && (
+        <p className="mt-1 text-sm text-gray-500">
+          <span className="rounded px-1 ring-2 ring-inset ring-indigo-500">U</span> Contrainte université : marqueur
+          indépendant (anneau indigo) — se cumule avec une préférence de garde (G+/G−) sur le même jour.
+        </p>
+      )}
     </main>
   );
 }

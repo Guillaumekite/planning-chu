@@ -54,6 +54,12 @@ export interface PlanningInput {
   wishes?: Record<DoctorId, number[]>;
   /** Whether ACU (acupuncture) scheduling is active for this planning. Default true. */
   acupuncture?: boolean;
+  /**
+   * Per universitaire doctor: days (1-based) they DECLARED as university-constraint days ("Univ").
+   * When a doctor has ≥1 declared day, those exact weekdays become their U days (no auto %-fill).
+   * When empty/absent, U days are auto-placed by universityRatio as before.
+   */
+  univConstraints?: Record<DoctorId, number[]>;
 }
 
 export type PlanningResult =
@@ -143,12 +149,24 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // puts one on a Monday garde, it must be G2 (evening from 18h) — see the G2-forcing step below.
   const acupuncture = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acupuncture));
 
+  // University-constraint days ("Univ") the doctor declared themselves. Honored only for universitaire
+  // doctors and only on weekdays (university is a weekday activity). A doctor with ≥1 declared day gets
+  // those EXACT days as U days; otherwise U is auto-placed by ratio (Pass 2).
+  const weekdaySet = new Set(days.filter((cd) => !cd.isWeekend && !cd.isHoliday).map((cd) => cd.day));
+  const univDays: Record<DoctorId, Set<number>> = {};
+  for (const doc of doctors) {
+    const declared = input.profiles?.[doc]?.universitaire ? (input.univConstraints?.[doc] ?? []) : [];
+    univDays[doc] = new Set(declared.filter((d) => weekdaySet.has(d)));
+  }
+
   // A garde is blocked unless the doctor is garde-available that day (and not on a TP day).
   const gardeBlocked: Record<DoctorId, number[]> = {};
   for (const doc of doctors) {
     const blocked: number[] = [];
     for (const cd of days) if (!GARDEABLE(avail(input, doc, cd.day)) || tpDays[doc].has(cd.day)) blocked.push(cd.day);
-    if (blocked.length) gardeBlocked[doc] = blocked;
+    // Being at university on day D forbids a garde the day BEFORE: its RS (D) would clash with the fac.
+    for (const d of univDays[doc]) if (d - 1 >= 1) blocked.push(d - 1);
+    if (blocked.length) gardeBlocked[doc] = [...new Set(blocked)];
   }
 
   // Garde fairness weight = part-time fraction × garde-availability fraction (days NOT blocked).
@@ -247,13 +265,29 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     }
   }
 
-  // Pass 2 — University (U): for each universitaire doctor, mark ~ratio% of their WEEKDAY
-  // working days as U, spread evenly. Skipped in July/August (academic break, per guide).
+  // Univ (declared): a universitaire who posted their own constraint days gets U on EXACTLY those
+  // days. If a declared day is also their garde: G1 → 'U+G1' (they're at the fac in the day, so
+  // another doctor must hold the bloc 7h30-18h → a BM-BS post that day); G2 → 'U+G2' (evening garde
+  // only, the day's G1 already covers the bloc, no replacement). Otherwise a plain 'U'.
+  const bmbsDays = new Set<number>();
+  for (const doc of doctors) {
+    if (univDays[doc].size === 0) continue;
+    for (const day of univDays[doc]) {
+      const cell = grid[doc][day];
+      if (cell === 'G1') { grid[doc][day] = 'U+G1'; bmbsDays.add(day); }
+      else if (cell === 'G2') { grid[doc][day] = 'U+G2'; }
+      else if (isPresent(doc, day) && !cell) grid[doc][day] = 'U';
+    }
+  }
+
+  // Pass 2 — University (U): for each universitaire doctor WITHOUT declared constraint days, mark
+  // ~ratio% of their WEEKDAY working days as U, spread evenly. Skipped in July/August (academic break).
   const isAcademicBreak = input.month === 7 || input.month === 8;
   if (!isAcademicBreak) {
     for (const doc of doctors) {
       const prof = input.profiles?.[doc];
       if (!prof?.universitaire) continue;
+      if (univDays[doc].size > 0) continue; // declared days already placed above
       const ratio = Math.max(0, Math.min(100, prof.universityRatio ?? 50));
       const workdays = days
         .filter((cd) => !cd.isWeekend && !cd.isHoliday && isPresent(doc, cd.day) && !grid[doc][cd.day])
@@ -309,6 +343,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     if (PED_DAYS.has(cd.weekday)) wanted.push('Ped'); // pédiatrie lun/mer/jeu/ven
     // Maternité : MS (jusqu'à 18h) les jours où le médecin acupuncture prend la G2 à 18h ; sinon MM.
     wanted.push(acuG2Days.has(cd.day) ? 'MS' : 'MM');
+    // BM-BS : bloc journée 7h30-18h, tenu par un autre médecin quand un universitaire est U+G1 ce jour.
+    if (bmbsDays.has(cd.day)) wanted.push('BM-BS');
     wanted.push('S', 'CS1', 'BM', 'CS2', 'BM', 'BM');
     if (presentCount >= 10) wanted.push('P'); // présence quand l'effectif est large
 

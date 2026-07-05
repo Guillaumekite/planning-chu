@@ -93,7 +93,14 @@ export default function AdminClient() {
     setResult(null);
     if (active.length < 2) { setResult({ error: 'Sélectionne au moins 2 médecins pour ce mois (case « Ce mois »).' }); return; }
     const availRes = await fetch(`/api/availability?year=${year}&month=${month}`);
-    const availability = availRes.ok ? (await availRes.json()).availability ?? {} : {};
+    const availData = availRes.ok ? await availRes.json() : {};
+    const availability = availData.availability ?? {};
+    // Declared university-constraint days per doctor (from the orthogonal `univ` layer).
+    const univConstraints: Record<string, number[]> = {};
+    for (const [name, perDay] of Object.entries((availData.univ ?? {}) as Record<string, Record<string, boolean>>)) {
+      const uDays = Object.entries(perDay).filter(([, v]) => v).map(([d]) => Number(d));
+      if (uDays.length) univConstraints[name] = uDays;
+    }
     type Profile = { universitaire?: boolean; universityRatio?: number; fte?: number; acupuncture?: boolean; douleurPoids?: number };
     const profiles: Record<string, Profile> = {};
     for (const d of active) {
@@ -108,7 +115,7 @@ export default function AdminClient() {
     try {
       const res = await fetch('/api/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, month, doctors: active.map((d) => d.name), availability, profiles, holidays: parseDays(holidays), acupuncture: acuOn }),
+        body: JSON.stringify({ year, month, doctors: active.map((d) => d.name), availability, profiles, univConstraints, holidays: parseDays(holidays), acupuncture: acuOn }),
       });
       setResult((await res.json()) as GenResult);
     } catch (e) {

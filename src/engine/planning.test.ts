@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { solvePlanning, type PlanningInput, type DoctorProfile } from './planning';
-import { daysInMonth } from './calendar';
+import { daysInMonth, buildMonth } from './calendar';
+import { DEFAULT_WEIGHTS } from './types';
 
 function doctors(n: number): string[] {
   return Array.from({ length: n }, (_, i) => `D${String(i + 1).padStart(2, '0')}`);
+}
+
+/** All weekday (Mon–Fri, non-holiday) day-numbers of a month. */
+function weekdaysOf(year: number, month: number): number[] {
+  return buildMonth(year, month, DEFAULT_WEIGHTS, []).filter((cd) => !cd.isWeekend && !cd.isHoliday).map((cd) => cd.day);
 }
 
 describe('solvePlanning — gardes & structure', () => {
@@ -245,6 +251,62 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     if (r2.status !== 'feasible') throw new Error('feasible');
     const avg2 = docs.filter((d) => d !== 'D02').reduce((s, d) => s + gardes(r2, d), 0) / (docs.length - 1);
     expect(Math.abs(gardes(r2, 'D02') - avg2)).toBeLessThanOrEqual(1.5);
+  });
+
+  it('places U on EXACTLY the declared Univ days (no auto %-fill) when constraints are posted', async () => {
+    const docs = doctors(12);
+    // D01 is universitaire but never gardable (no_garde every day) → declared days become plain 'U',
+    // with no garde/RS interference. Declared weekdays in April 2026: 7, 14, 21 (all Tuesdays).
+    const noGarde: Record<number, 'no_garde'> = {};
+    for (let d = 1; d <= 30; d++) noGarde[d] = 'no_garde';
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { universitaire: true, universityRatio: 50 } },
+      availability: { D01: noGarde },
+      univConstraints: { D01: [7, 14, 21] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const uDays = res.days.filter((cd) => (res.grid.D01[cd.day] ?? '').startsWith('U')).map((cd) => cd.day);
+    expect(uDays.sort((a, b) => a - b)).toEqual([7, 14, 21]);
+  });
+
+  it('blocks the garde the DAY BEFORE a declared Univ day (RS would clash with being at university)', async () => {
+    const docs = doctors(12);
+    // D01 wishes a garde on day 13 but declares Univ on day 14 → garde on 13 must be blocked.
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { universitaire: true, universityRatio: 50 } },
+      availability: { D01: { 13: 'souhait_garde' } },
+      univConstraints: { D01: [14] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(['G1', 'G2']).not.toContain(res.grid.D01[13]);
+  });
+
+  it('when a universitaire is G1 on a Univ day → U+G1 and exactly one BM-BS covers the bloc that day', async () => {
+    const docs = doctors(12);
+    // D01 universitaire, fully available, declares EVERY weekday as Univ → any weekday garde lands on
+    // a Univ day, producing U+G1 (or U+G2). This makes at least one U+G1 highly likely.
+    const univAll = weekdaysOf(2026, 4);
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { universitaire: true, universityRatio: 50 } },
+      univConstraints: { D01: univAll },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    let uG1Count = 0;
+    for (const cd of res.days) {
+      const bmbs = docs.filter((d) => res.grid[d][cd.day] === 'BM-BS');
+      const uG1 = docs.filter((d) => res.grid[d][cd.day] === 'U+G1');
+      // Invariant: BM-BS appears iff some doctor is U+G1 that day, exactly one each, on distinct docs.
+      expect(bmbs.length).toBe(uG1.length);
+      if (uG1.length) {
+        expect(bmbs.length).toBe(1);
+        expect(bmbs[0]).not.toBe(uG1[0]);
+        uG1Count += 1;
+      }
+    }
+    expect(uG1Count).toBeGreaterThan(0); // the scenario actually exercises the U+G1 → BM-BS path
   });
 
   it('a part-time (50%) doctor works ~half the weekdays, with off days left BLANK (not labelled)', async () => {

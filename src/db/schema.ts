@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS availability (
   PRIMARY KEY (doctor_id, year, month, day)
 );
 
+-- University-constraint marker: orthogonal to the state column (e.g. souhait_garde AND univ together).
+ALTER TABLE availability ADD COLUMN IF NOT EXISTS univ boolean NOT NULL DEFAULT false;
+
 -- Which doctors work a given month (the admin's per-month roster).
 CREATE TABLE IF NOT EXISTS rosters (
   year      integer NOT NULL,

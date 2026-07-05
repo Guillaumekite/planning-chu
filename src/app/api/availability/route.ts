@@ -22,6 +22,7 @@ const PutBody = z.object({
   month: z.number().int().min(1).max(12),
   day: z.number().int().min(1).max(31),
   state: z.enum(['dispo', 'souhait_garde', 'no_garde', 'conge']),
+  univ: z.boolean().optional(),
   doctorId: z.number().int().optional(),
 });
 
@@ -35,6 +36,6 @@ export async function PUT(req: Request) {
   const doctorId = s.role === 'admin' ? parsed.data.doctorId : s.doctorId ?? undefined;
   if (doctorId == null) return NextResponse.json({ error: 'Médecin non identifié' }, { status: 400 });
 
-  await setCell(doctorId, parsed.data.year, parsed.data.month, parsed.data.day, parsed.data.state);
+  await setCell(doctorId, parsed.data.year, parsed.data.month, parsed.data.day, parsed.data.state, parsed.data.univ ?? false);
   return NextResponse.json({ ok: true });
 }
