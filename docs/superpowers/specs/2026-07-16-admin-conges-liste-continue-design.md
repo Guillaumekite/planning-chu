@@ -55,13 +55,24 @@ aujourd'hui affiché en deux blocs cassés au changement de mois, et ne peut pas
 ## Conception technique
 
 ### `listCongeRuns` — requête (src/lib/availability.ts)
-- Ne prend plus `(year, month)`. Calcule un plancher `(y0, m0, d0)` = date
+- Ne prend plus `(year, month)`. Calcule un plancher métier `floor` = date
   d'aujourd'hui (Europe/Paris) − 7 jours.
-- Requête tous les jours `state = 'conge'` dont la date `(year, month, day)` est
-  **≥ plancher**, triés `ORDER BY year, month, day, doctor_id`.
+- **Le plancher s'applique au bloc (run), pas au jour isolé.** Filtrer chaque jour
+  en SQL par `≥ floor` casserait le début d'un congé long en cours (un congé
+  1→20 juillet avec `floor` au 9 juillet s'afficherait « du 9 au 20 » au lieu de
+  « du 1 au 20 »). Donc :
+  1. **Pré-filtre SQL large** : requête tous les jours `state = 'conge'` dont la
+     date est `≥ (floor − 45 jours)`. Ce recul de 45 jours garantit de capturer
+     l'intégralité de tout congé qui se termine à partir de `floor` (un congé
+     réaliste dure bien moins de 38 jours), tout en bornant le volume lu.
+  2. **Regroupement** en runs (voir section suivante).
+  3. **Filtre final au niveau run** : on ne garde que les runs dont la **date de
+     fin `end` est ≥ `floor`**.
   - Comparaison de date en SQL via un entier ordonnable
-    `(year*10000 + month*100 + day)` comparé au plancher encodé de la même façon,
+    `(year*10000 + month*100 + day)` comparé aux bornes encodées de la même façon,
     pour rester portable et indépendant du type date SQL.
+  - Tri SQL : `ORDER BY year, month, day, doctor_id` (le tri final par proximité
+    est appliqué sur les runs).
 
 ### Regroupement des jours consécutifs (multi-mois)
 - Le regroupement actuel colle deux jours si `day === lastDay + 1`. C'est **faux**
@@ -107,7 +118,10 @@ aujourd'hui affiché en deux blocs cassés au changement de mois, et ne peut pas
   - congé entièrement passé (fin > 7 jours avant aujourd'hui) → exclu ;
   - congé en cours (commencé avant, se termine après aujourd'hui) → inclus ;
   - congé futur → inclus ;
-  - congé fini il y a 3 jours → inclus (dans la fenêtre de 7 jours).
+  - congé fini il y a 3 jours → inclus (dans la fenêtre de 7 jours) ;
+  - **congé long en cours** (commencé il y a 15 jours, se termine dans 5 jours) →
+    inclus **et affiché avec sa vraie date de début** (le pré-filtre de 45 jours ne
+    doit pas tronquer le début du bloc).
 - **Validation** :
   - valider un bloc à cheval sur deux mois → toutes les lignes des deux mois
     passent à `approved` ;
