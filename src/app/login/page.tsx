@@ -6,7 +6,6 @@ import Link from 'next/link';
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [asAdmin, setAsAdmin] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -18,7 +17,7 @@ export default function LoginPage() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, asAdmin }),
+        body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? 'Échec de la connexion.'); return; }
@@ -41,10 +40,6 @@ export default function LoginPage() {
           onChange={(e) => setUsername(e.target.value)} autoFocus />
         <input type="password" className="w-full rounded border border-gray-300 px-3 py-2" placeholder="Mot de passe" value={password}
           onChange={(e) => setPassword(e.target.value)} />
-        <label className="flex items-center gap-2 text-sm text-gray-700">
-          <input type="checkbox" checked={asAdmin} onChange={(e) => setAsAdmin(e.target.checked)} />
-          Je suis administrateur
-        </label>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button disabled={loading} className="w-full rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">
           {loading ? 'Connexion…' : 'Se connecter'}
