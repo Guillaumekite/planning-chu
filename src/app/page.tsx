@@ -39,7 +39,7 @@ export default function Home() {
       </header>
 
       <main className="mx-auto flex max-w-md flex-col justify-center px-6 py-24">
-        <h1 className="text-3xl font-bold">Planning des gardes</h1>
+        <h1 className="text-3xl font-bold">Planning</h1>
         <p className="mt-3 text-gray-600">
           Entre le code d&apos;accès pour consulter les plannings. Les médecins peuvent se connecter
           (en haut à droite) pour déclarer leurs disponibilités et leurs congés.
