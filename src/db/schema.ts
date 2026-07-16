@@ -1,4 +1,5 @@
-import { query } from './client';
+import bcrypt from 'bcryptjs';
+import { query, queryOne } from './client';
 
 // Idempotent schema (CREATE TABLE IF NOT EXISTS). Runs on first DB access; no migration tooling
 // needed for an app this size. Same DDL works on PGlite and Postgres.
@@ -45,6 +46,9 @@ CREATE TABLE IF NOT EXISTS availability (
 -- University-constraint marker: orthogonal to the state column (e.g. souhait_garde AND univ together).
 ALTER TABLE availability ADD COLUMN IF NOT EXISTS univ boolean NOT NULL DEFAULT false;
 
+-- Optional reason the admin gives when refusing a leave request (shown to the doctor).
+ALTER TABLE availability ADD COLUMN IF NOT EXISTS conge_note text;
+
 -- Which doctors work a given month (the admin's per-month roster).
 CREATE TABLE IF NOT EXISTS rosters (
   year      integer NOT NULL,
@@ -78,7 +82,29 @@ export function ensureSchema(): Promise<void> {
         const s = stmt.trim();
         if (s) await query(s);
       }
+      await runConfigMigrations();
     })();
   }
   return ready;
+}
+
+/**
+ * One-off data migrations, each guarded by a flag in app_config so they run exactly
+ * once even on an already-deployed database. Idempotent and safe to call repeatedly.
+ */
+async function runConfigMigrations(): Promise<void> {
+  // v1: reset the admin account to the fixed password `medecin973` (was `chuguyane`).
+  const done = await queryOne<{ value: string }>(
+    `SELECT value FROM app_config WHERE key = 'admin_pw_reset_v1'`,
+  );
+  if (!done) {
+    const hash = bcrypt.hashSync('medecin973', 10);
+    await query(
+      `UPDATE users SET password_hash = $1, must_change_password = false WHERE role = 'admin'`,
+      [hash],
+    );
+    await query(
+      `INSERT INTO app_config (key, value) VALUES ('admin_pw_reset_v1', 'done') ON CONFLICT (key) DO NOTHING`,
+    );
+  }
 }

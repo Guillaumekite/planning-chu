@@ -7,7 +7,10 @@ import { MONTHS_FR } from '@/lib/store';
 type Run = {
   doctorId: number; name: string; startDay: number; endDay: number;
   length: number; days: number[]; status: 'pending' | 'approved' | 'refused' | 'mixed';
+  note: string | null;
 };
+
+const runKey = (run: Run) => `${run.doctorId}-${run.startDay}`;
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   pending: { label: 'En attente', cls: 'bg-blue-100 text-blue-800' },
@@ -21,6 +24,8 @@ export default function CongesClient() {
   const [month, setMonth] = useState(4);
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refusingKey, setRefusingKey] = useState<string | null>(null);
+  const [refuseNote, setRefuseNote] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -30,12 +35,19 @@ export default function CongesClient() {
   }, [year, month]);
   useEffect(() => { load(); }, [load]);
 
-  async function setStatus(run: Run, status: 'approved' | 'refused' | 'pending') {
+  async function setStatus(run: Run, status: 'approved' | 'refused' | 'pending', note?: string) {
     await fetch('/api/conge', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ doctorId: run.doctorId, year, month, days: run.days, status }),
+      body: JSON.stringify({ doctorId: run.doctorId, year, month, days: run.days, status, note }),
     });
+    setRefusingKey(null);
+    setRefuseNote('');
     await load();
+  }
+
+  function startRefuse(run: Run) {
+    setRefusingKey(runKey(run));
+    setRefuseNote(run.note ?? '');
   }
 
   const pending = runs.filter((r) => r.status === 'pending' || r.status === 'mixed');
@@ -71,16 +83,32 @@ export default function CongesClient() {
           {pending.length === 0 ? <p className="mb-6 text-sm text-gray-400">Aucune demande en attente.</p> : (
             <ul className="mb-8 space-y-2">
               {pending.map((run, i) => (
-                <li key={i} className="flex items-center justify-between rounded-lg border border-gray-200 p-3">
-                  <div>
-                    <span className="font-medium">{run.name}</span>
-                    <span className="ml-2 text-sm text-gray-600">{fmt(run)}</span>
-                    <span className={`ml-2 rounded px-2 py-0.5 text-xs ${STATUS_BADGE[run.status].cls}`}>{STATUS_BADGE[run.status].label}</span>
+                <li key={i} className="rounded-lg border border-gray-200 p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-medium">{run.name}</span>
+                      <span className="ml-2 text-sm text-gray-600">{fmt(run)}</span>
+                      <span className={`ml-2 rounded px-2 py-0.5 text-xs ${STATUS_BADGE[run.status].cls}`}>{STATUS_BADGE[run.status].label}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setStatus(run, 'approved')} className="rounded bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700">Valider</button>
+                      <button onClick={() => startRefuse(run)} className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700">Refuser</button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => setStatus(run, 'approved')} className="rounded bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700">Valider</button>
-                    <button onClick={() => setStatus(run, 'refused')} className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700">Refuser</button>
-                  </div>
+                  {refusingKey === runKey(run) && (
+                    <div className="mt-3 rounded border border-red-200 bg-red-50 p-3">
+                      <label className="mb-1 block text-sm font-medium text-red-800">Motif du refus (optionnel, visible par le médecin)</label>
+                      <textarea
+                        autoFocus rows={2} value={refuseNote} onChange={(e) => setRefuseNote(e.target.value)}
+                        placeholder="Ex : effectif insuffisant cette semaine-là."
+                        className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+                      />
+                      <div className="mt-2 flex gap-2">
+                        <button onClick={() => setStatus(run, 'refused', refuseNote)} className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700">Confirmer le refus</button>
+                        <button onClick={() => { setRefusingKey(null); setRefuseNote(''); }} className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50">Annuler</button>
+                      </div>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -90,13 +118,18 @@ export default function CongesClient() {
           {decided.length === 0 ? <p className="text-sm text-gray-400">Rien pour l&apos;instant.</p> : (
             <ul className="space-y-2">
               {decided.map((run, i) => (
-                <li key={i} className="flex items-center justify-between rounded-lg border border-gray-100 p-3">
-                  <div>
-                    <span className="font-medium">{run.name}</span>
-                    <span className="ml-2 text-sm text-gray-600">{fmt(run)}</span>
-                    <span className={`ml-2 rounded px-2 py-0.5 text-xs ${STATUS_BADGE[run.status].cls}`}>{STATUS_BADGE[run.status].label}</span>
+                <li key={i} className="rounded-lg border border-gray-100 p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-medium">{run.name}</span>
+                      <span className="ml-2 text-sm text-gray-600">{fmt(run)}</span>
+                      <span className={`ml-2 rounded px-2 py-0.5 text-xs ${STATUS_BADGE[run.status].cls}`}>{STATUS_BADGE[run.status].label}</span>
+                    </div>
+                    <button onClick={() => setStatus(run, 'pending')} className="text-xs text-gray-500 hover:text-blue-600">remettre en attente</button>
                   </div>
-                  <button onClick={() => setStatus(run, 'pending')} className="text-xs text-gray-500 hover:text-blue-600">remettre en attente</button>
+                  {run.status === 'refused' && run.note && (
+                    <p className="mt-1 text-sm text-red-700"><span className="font-medium">Motif :</span> {run.note}</p>
+                  )}
                 </li>
               ))}
             </ul>

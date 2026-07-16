@@ -9,6 +9,7 @@ import { DEFAULT_WEIGHTS } from '@/engine/types';
 type Doc = { id: number; name: string; universitaire: boolean };
 type Avail = Record<string, Record<number, Availability>>;
 type Conge = Record<string, Record<number, string>>;
+type CongeNote = Record<string, Record<number, string>>;
 type UnivMap = Record<string, Record<number, boolean>>;
 /** The garde-preference palette states plus the orthogonal "univ" toggle brush. */
 type Brush = Availability | 'univ';
@@ -20,6 +21,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   const [saved, setSaved] = useState<Avail>({});
   const [pending, setPending] = useState<Avail>({});
   const [conge, setConge] = useState<Conge>({});
+  const [congeNote, setCongeNote] = useState<CongeNote>({});
   const [savedUniv, setSavedUniv] = useState<UnivMap>({});
   const [pendingUniv, setPendingUniv] = useState<UnivMap>({});
   const [brush, setBrush] = useState<Brush>('souhait_garde');
@@ -38,6 +40,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     if (r.ok) {
       const d = await r.json();
       setSaved(d.availability ?? {}); setPending(d.availability ?? {}); setConge(d.congeStatus ?? {});
+      setCongeNote(d.congeNote ?? {});
       setSavedUniv(d.univ ?? {}); setPendingUniv(d.univ ?? {});
     }
   }, [year, month]);
@@ -66,6 +69,25 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     if (u) return { label: base.label || 'U', cls: `${base.cls} ring-2 ring-inset ring-indigo-500` };
     return base;
   }
+
+  // Refused leave grouped into consecutive-day runs, with the admin's note, for the recap below the grid.
+  function refusedRuns(name: string): { start: number; end: number; note?: string }[] {
+    const rdays = Object.keys(conge[name] ?? {}).map(Number)
+      .filter((d) => conge[name]?.[d] === 'refused').sort((a, b) => a - b);
+    const runs: { start: number; end: number; note?: string }[] = [];
+    for (const d of rdays) {
+      const last = runs[runs.length - 1];
+      if (last && d === last.end + 1) last.end = d; else runs.push({ start: d, end: d });
+    }
+    for (const r of runs) {
+      for (let d = r.start; d <= r.end; d++) { const n = congeNote[name]?.[d]; if (n) { r.note = n; break; } }
+    }
+    return runs;
+  }
+  const m = MONTHS_FR[month - 1].toLowerCase();
+  const fmtRange = (r: { start: number; end: number }) =>
+    r.start === r.end ? `le ${r.start} ${m}` : `du ${r.start} au ${r.end} ${m}`;
+  const anyRefused = doctors.some((d) => refusedRuns(d.name).length > 0);
 
   function apply(name: string, day: number) {
     setSavedMsg('');
@@ -191,7 +213,10 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
                   <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-2 py-1.5 text-left font-medium whitespace-nowrap">{doc.name}</td>
                   {days.map((d) => {
                     const c = cellLook(doc.name, d.day);
-                    return <td key={d.day} onClick={() => apply(doc.name, d.day)} className={`h-9 w-9 min-w-9 cursor-pointer border border-gray-100 p-0 text-xs ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
+                    const refused = conge[doc.name]?.[d.day] === 'refused';
+                    const note = refused ? congeNote[doc.name]?.[d.day] : undefined;
+                    const title = refused ? (note ? `Congé refusé — motif : ${note}` : 'Congé refusé') : undefined;
+                    return <td key={d.day} title={title} onClick={() => apply(doc.name, d.day)} className={`h-9 w-9 min-w-9 cursor-pointer border border-gray-100 p-0 text-xs ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
                   })}
                 </tr>
               ))}
@@ -205,6 +230,21 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
         <span className="ml-1 rounded bg-green-300 px-1 text-green-900">validé</span> ou
         <span className="ml-1 rounded bg-red-300 px-1 text-red-900">refusé</span> par l&apos;admin (après enregistrement).
       </p>
+
+      {anyRefused && (
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3">
+          <p className="mb-1 text-sm font-semibold text-red-800">Congés refusés — {MONTHS_FR[month - 1]} {year}</p>
+          <ul className="space-y-1 text-sm text-red-700">
+            {doctors.flatMap((doc) => refusedRuns(doc.name).map((r, i) => (
+              <li key={`${doc.id}-${i}`}>
+                {isAdmin && <span className="font-medium">{doc.name} — </span>}
+                <span>{fmtRange(r)}</span>
+                {r.note ? <span> — <span className="font-medium">motif :</span> {r.note}</span> : <span className="text-red-500"> — sans motif</span>}
+              </li>
+            )))}
+          </ul>
+        </div>
+      )}
       {hasUniversitaire && (
         <p className="mt-1 text-sm text-gray-500">
           <span className="rounded px-1 ring-2 ring-inset ring-indigo-500">U</span> Contrainte université : marqueur
