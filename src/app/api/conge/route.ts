@@ -25,13 +25,14 @@ const PutBody = z.object({
   month: z.number().int().min(1).max(12),
   days: z.array(z.number().int().min(1).max(31)).min(1),
   status: z.enum(['pending', 'approved', 'refused']),
+  note: z.string().max(500).optional(),
 });
 
 export async function PUT(req: Request) {
   if (!(await requireAdmin())) return NextResponse.json({ error: 'Non autorisé' }, { status: 401 });
   const parsed = PutBody.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Requête invalide' }, { status: 400 });
-  const { doctorId, year, month, days, status } = parsed.data;
-  await setCongeStatus(doctorId, year, month, days, status);
+  const { doctorId, year, month, days, status, note } = parsed.data;
+  await setCongeStatus(doctorId, year, month, days, status, note);
   return NextResponse.json({ ok: true });
 }

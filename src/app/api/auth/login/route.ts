@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { queryOne } from '@/db/client';
 import { ensureSchema } from '@/db/schema';
-import { sign, SESSION_COOKIE, cookieOptions, type Session } from '@/lib/auth';
+import { sign, SESSION_COOKIE, sessionCookieOptions, type Session } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 
@@ -40,6 +40,6 @@ export async function POST(req: Request) {
     mustChangePassword: user.must_change_password,
     redirect: user.must_change_password ? '/change-password' : home,
   });
-  res.cookies.set(SESSION_COOKIE, await sign(session), cookieOptions);
+  res.cookies.set(SESSION_COOKIE, await sign(session), sessionCookieOptions);
   return res;
 }

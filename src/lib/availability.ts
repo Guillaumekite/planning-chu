@@ -7,6 +7,8 @@ export type AvailState = 'dispo' | 'souhait_garde' | 'no_garde' | 'conge';
 export type AvailabilityByName = Record<string, Record<number, AvailState>>;
 /** doctor name → (day → conge approval status) */
 export type CongeStatusByName = Record<string, Record<number, string>>;
+/** doctor name → (day → refusal note) */
+export type CongeNoteByName = Record<string, Record<number, string>>;
 /** doctor name → (day → true) for declared university-constraint days. */
 export type UnivByName = Record<string, Record<number, boolean>>;
 
@@ -14,26 +16,28 @@ export async function getAvailability(
   year: number,
   month: number,
   doctorId?: number,
-): Promise<{ availability: AvailabilityByName; congeStatus: CongeStatusByName; univ: UnivByName }> {
+): Promise<{ availability: AvailabilityByName; congeStatus: CongeStatusByName; congeNote: CongeNoteByName; univ: UnivByName }> {
   await ensureSchema();
   const params: unknown[] = [year, month];
   let where = 'a.year = $1 AND a.month = $2';
   if (doctorId != null) { params.push(doctorId); where += ` AND a.doctor_id = $3`; }
-  const rows = await query<{ name: string; day: number; state: AvailState; conge_status: string | null; univ: boolean }>(
-    `SELECT d.name, a.day, a.state, a.conge_status, a.univ
+  const rows = await query<{ name: string; day: number; state: AvailState; conge_status: string | null; conge_note: string | null; univ: boolean }>(
+    `SELECT d.name, a.day, a.state, a.conge_status, a.conge_note, a.univ
      FROM availability a JOIN doctors d ON d.id = a.doctor_id
      WHERE ${where}`,
     params,
   );
   const availability: AvailabilityByName = {};
   const congeStatus: CongeStatusByName = {};
+  const congeNote: CongeNoteByName = {};
   const univ: UnivByName = {};
   for (const r of rows) {
     (availability[r.name] ??= {})[r.day] = r.state;
     if (r.conge_status) (congeStatus[r.name] ??= {})[r.day] = r.conge_status;
+    if (r.conge_note) (congeNote[r.name] ??= {})[r.day] = r.conge_note;
     if (r.univ) (univ[r.name] ??= {})[r.day] = true;
   }
-  return { availability, congeStatus, univ };
+  return { availability, congeStatus, congeNote, univ };
 }
 
 export type CongeStatus = 'pending' | 'approved' | 'refused';
@@ -45,13 +49,14 @@ export type CongeRun = {
   length: number;
   days: number[];
   status: CongeStatus | 'mixed';
+  note: string | null;
 };
 
 /** List leave requests grouped into consecutive-day runs, for the admin validation screen. */
 export async function listCongeRuns(year: number, month: number): Promise<CongeRun[]> {
   await ensureSchema();
-  const rows = await query<{ doctor_id: number; name: string; day: number; conge_status: string | null }>(
-    `SELECT a.doctor_id, d.name, a.day, a.conge_status
+  const rows = await query<{ doctor_id: number; name: string; day: number; conge_status: string | null; conge_note: string | null }>(
+    `SELECT a.doctor_id, d.name, a.day, a.conge_status, a.conge_note
      FROM availability a JOIN doctors d ON d.id = a.doctor_id
      WHERE a.year = $1 AND a.month = $2 AND a.state = 'conge'
      ORDER BY d.name, a.day`,
@@ -60,15 +65,18 @@ export async function listCongeRuns(year: number, month: number): Promise<CongeR
   const runs: CongeRun[] = [];
   let cur: CongeRun | null = null;
   let statuses: Set<string> = new Set();
+  let notes: Set<string> = new Set();
   const flush = () => {
     if (cur) {
       cur.length = cur.days.length;
       cur.endDay = cur.days[cur.days.length - 1];
       cur.status = statuses.size === 1 ? ([...statuses][0] as CongeStatus) : 'mixed';
+      cur.note = notes.size ? [...notes].join(' ') : null;
       runs.push(cur);
     }
     cur = null;
     statuses = new Set();
+    notes = new Set();
   };
   for (const r of rows) {
     const st = r.conge_status ?? 'pending';
@@ -76,29 +84,36 @@ export async function listCongeRuns(year: number, month: number): Promise<CongeR
       cur.days.push(r.day);
     } else {
       flush();
-      cur = { doctorId: r.doctor_id, name: r.name, startDay: r.day, endDay: r.day, length: 1, days: [r.day], status: 'pending' };
+      cur = { doctorId: r.doctor_id, name: r.name, startDay: r.day, endDay: r.day, length: 1, days: [r.day], status: 'pending', note: null };
     }
     statuses.add(st);
+    if (r.conge_note) notes.add(r.conge_note);
   }
   flush();
   return runs;
 }
 
-/** Set the approval status on specific leave days for a doctor. */
+/**
+ * Set the approval status on specific leave days for a doctor. An optional `note`
+ * (the admin's reason) is stored only when refusing; approving or resetting to
+ * pending clears any previous note.
+ */
 export async function setCongeStatus(
   doctorId: number,
   year: number,
   month: number,
   days: number[],
   status: CongeStatus,
+  note?: string | null,
 ): Promise<void> {
   if (!days.length) return;
   await ensureSchema();
-  const placeholders = days.map((_, i) => `$${i + 4}`).join(', ');
+  const cleanNote = status === 'refused' && note && note.trim() ? note.trim() : null;
+  const placeholders = days.map((_, i) => `$${i + 5}`).join(', ');
   await query(
-    `UPDATE availability SET conge_status = $1
-     WHERE doctor_id = $2 AND year = $3 AND day IN (${placeholders}) AND state = 'conge' AND month = $${days.length + 4}`,
-    [status, doctorId, year, ...days, month],
+    `UPDATE availability SET conge_status = $1, conge_note = $2
+     WHERE doctor_id = $3 AND year = $4 AND day IN (${placeholders}) AND state = 'conge' AND month = $${days.length + 5}`,
+    [status, cleanNote, doctorId, year, ...days, month],
   );
 }
 

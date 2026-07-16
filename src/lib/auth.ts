@@ -66,6 +66,7 @@ export async function hasViewAccess(): Promise<boolean> {
   return !!v?.ok;
 }
 
+// Long-lived cookie (30 days) — used for the shared view passcode (pc_view).
 export const cookieOptions = {
   httpOnly: true,
   secure: true,
@@ -73,3 +74,16 @@ export const cookieOptions = {
   path: '/',
   maxAge: MAX_AGE,
 };
+
+// Session-only cookie (no maxAge) — used for the personal login (pc_session).
+// The browser drops it when it closes, so login is re-requested at each new visit
+// and a shared computer never keeps a residual admin session.
+export const sessionCookieOptions = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'lax' as const,
+  path: '/',
+};
+
+// Options to clear a cookie immediately.
+export const clearCookieOptions = { path: '/', maxAge: 0 };

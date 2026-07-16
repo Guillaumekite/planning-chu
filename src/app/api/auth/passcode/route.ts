@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { queryOne } from '@/db/client';
 import { ensureSchema } from '@/db/schema';
-import { sign, VIEW_COOKIE, cookieOptions } from '@/lib/auth';
+import { sign, VIEW_COOKIE, SESSION_COOKIE, cookieOptions, clearCookieOptions } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 
@@ -19,5 +19,8 @@ export async function POST(req: Request) {
   }
   const res = NextResponse.json({ ok: true });
   res.cookies.set(VIEW_COOKIE, await sign({ ok: true }), cookieOptions);
+  // Entering the shared passcode grants view-only access: drop any residual login
+  // session so the visitor is never left logged in as admin (or anyone else).
+  res.cookies.set(SESSION_COOKIE, '', clearCookieOptions);
   return res;
 }

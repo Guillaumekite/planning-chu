@@ -15,12 +15,12 @@ async function main() {
   // Bootstrap an admin account on first run so the chief can log in and create the others.
   const userCount = await queryOne<{ n: number }>(`SELECT count(*)::int AS n FROM users`);
   if (userCount?.n === 0) {
-    const hash = bcrypt.hashSync('chuguyane', 10);
+    const hash = bcrypt.hashSync('medecin973', 10);
     await query(
-      `INSERT INTO users (username, password_hash, role, must_change_password) VALUES ('admin', $1, 'admin', true)`,
+      `INSERT INTO users (username, password_hash, role, must_change_password) VALUES ('admin', $1, 'admin', false)`,
       [hash],
     );
-    console.log("Compte admin créé : nom 'admin' / mot de passe 'chuguyane' (à changer).");
+    console.log("Compte admin créé : nom 'admin' / mot de passe 'medecin973'.");
   }
 
   const tables = await query<{ table_name: string }>(
