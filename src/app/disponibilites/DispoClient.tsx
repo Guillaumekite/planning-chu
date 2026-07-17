@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import AdminNav from '@/components/AdminNav';
 import { MONTHS_FR, WEEKDAYS_FR, AVAIL_STATES, AVAIL_INFO, type Availability } from '@/lib/store';
 import { buildMonth } from '@/engine/calendar';
 import { DEFAULT_WEIGHTS } from '@/engine/types';
@@ -150,11 +151,17 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     <main className="w-full p-6 font-sans text-gray-900 select-none">
       <div className="mb-1 flex items-center justify-between">
         <h1 className="text-2xl font-bold">{isAdmin ? 'Disponibilités des médecins' : 'Mes disponibilités'}</h1>
-        <div className="flex items-center gap-4 text-sm">
-          <Link href="/planning" className="font-medium text-blue-600 hover:underline">← Planning commun</Link>
-          {isAdmin && <Link href="/admin" className="font-medium text-blue-600 hover:underline">Admin</Link>}
-          <button onClick={logout} className="text-gray-500 hover:text-red-600">Déconnexion</button>
-        </div>
+        {isAdmin ? (
+          <div className="flex items-center gap-4 text-sm">
+            <Link href="/planning" className="font-medium text-blue-600 hover:underline">← Planning commun</Link>
+            <AdminNav active="disponibilites" />
+          </div>
+        ) : (
+          <div className="flex items-center gap-4 text-sm">
+            <Link href="/planning" className="font-medium text-blue-600 hover:underline">← Planning commun</Link>
+            <button onClick={logout} className="text-gray-500 hover:text-red-600">Déconnexion</button>
+          </div>
+        )}
       </div>
       <p className="mb-4 text-sm text-gray-500">
         Choisis un état, applique-le sur les jours, puis clique <b>Enregistrer</b>.
