@@ -17,7 +17,7 @@ export default function AdminNav({ active }: { active: AdminPage }) {
   }
 
   return (
-    <div className="flex items-center gap-4 text-sm">
+    <div className="fixed top-6 right-6 z-10 flex items-center gap-4 bg-white text-sm">
       <div className="flex items-center gap-1">
         {TABS.map((tab) => (
           <Link

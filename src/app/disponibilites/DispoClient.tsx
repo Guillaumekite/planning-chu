@@ -150,12 +150,12 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   return (
     <main className="w-full p-6 font-sans text-gray-900 select-none">
       <div className="mb-1 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{isAdmin ? 'Disponibilités des médecins' : 'Mes disponibilités'}</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">{isAdmin ? 'Disponibilités des médecins' : 'Mes disponibilités'}</h1>
+          {isAdmin && <Link href="/planning" className="text-sm font-medium text-blue-600 hover:underline">← Planning commun</Link>}
+        </div>
         {isAdmin ? (
-          <div className="flex items-center gap-4 text-sm">
-            <Link href="/planning" className="font-medium text-blue-600 hover:underline">← Planning commun</Link>
-            <AdminNav active="disponibilites" />
-          </div>
+          <AdminNav active="disponibilites" />
         ) : (
           <div className="flex items-center gap-4 text-sm">
             <Link href="/planning" className="font-medium text-blue-600 hover:underline">← Planning commun</Link>
