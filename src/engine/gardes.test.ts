@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { solveGardes } from './gardes';
-import { daysInMonth } from './calendar';
+import { daysInMonth, buildMonth } from './calendar';
 import { mulberry32, randInt } from './rng';
+import { DEFAULT_WEIGHTS } from './types';
 import type { GardeInput, GardeResult } from './types';
 
 function doctors(n: number): string[] {
@@ -67,6 +68,17 @@ describe('solveGardes — equity', () => {
     if (res.status === 'feasible') {
       expect(res.equity.spread).toBeLessThanOrEqual(2);
     }
+  });
+
+  it('counts Friday in the weekend equity bucket (Fri+Sat+Sun)', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(14) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const days = buildMonth(2026, 4, DEFAULT_WEIGHTS);
+    const friSatSun = days.filter((d) => d.weekday >= 4).length; // Fri(4), Sat(5), Sun(6)
+    const totalWeekendCount = Object.values(res.equity.weekendCount).reduce((s, v) => s + v, 0);
+    // 2 doctors (G1+G2) on garde every Fri/Sat/Sun day.
+    expect(totalWeekendCount).toBe(friSatSun * 2);
   });
 
   it('rotates weekend/heavy gardes fairly across the roster', async () => {
