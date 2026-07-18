@@ -91,6 +91,16 @@ describe('solveGardes — equity', () => {
     }
   });
 
+  it('rotates Fri/Sat/Sun gardes fairly across the roster', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(14) });
+    expect(res.status).toBe('feasible');
+    if (res.status === 'feasible') {
+      const we = Object.values(res.equity.weekendCount);
+      // No doctor hoards Fri/Sat/Sun gardes while another gets none.
+      expect(Math.max(...we) - Math.min(...we)).toBeLessThanOrEqual(3);
+    }
+  });
+
   it('spreads each doctor\'s gardes across the month (no clustering)', async () => {
     const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(16) });
     expect(res.status).toBe('feasible');
