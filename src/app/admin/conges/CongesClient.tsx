@@ -4,13 +4,14 @@ import { useCallback, useEffect, useState } from 'react';
 import AdminNav from '@/components/AdminNav';
 import { MONTHS_FR } from '@/lib/store';
 
+type YMD = { year: number; month: number; day: number };
 type Run = {
-  doctorId: number; name: string; startDay: number; endDay: number;
-  length: number; days: number[]; status: 'pending' | 'approved' | 'refused' | 'mixed';
+  doctorId: number; name: string; start: YMD; end: YMD;
+  length: number; dates: YMD[]; status: 'pending' | 'approved' | 'refused' | 'mixed';
   note: string | null;
 };
 
-const runKey = (run: Run) => `${run.doctorId}-${run.startDay}`;
+const runKey = (run: Run) => `${run.doctorId}-${run.start.year}-${run.start.month}-${run.start.day}`;
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   pending: { label: 'En attente', cls: 'bg-blue-100 text-blue-800' },
@@ -19,9 +20,16 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   mixed: { label: 'Mixte', cls: 'bg-gray-100 text-gray-700' },
 };
 
+const monthName = (m: number) => MONTHS_FR[m - 1].toLowerCase();
+
+function fmt(run: Run) {
+  const { start: s, end: e } = run;
+  if (run.length === 1) return `le ${s.day} ${monthName(s.month)}`;
+  if (s.year === e.year && s.month === e.month) return `du ${s.day} au ${e.day} ${monthName(s.month)} (${run.length} jours)`;
+  return `du ${s.day} ${monthName(s.month)} au ${e.day} ${monthName(e.month)} (${run.length} jours)`;
+}
+
 export default function CongesClient() {
-  const [year, setYear] = useState(2026);
-  const [month, setMonth] = useState(4);
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(false);
   const [refusingKey, setRefusingKey] = useState<string | null>(null);
@@ -29,16 +37,16 @@ export default function CongesClient() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const r = await fetch(`/api/conge?year=${year}&month=${month}`);
+    const r = await fetch('/api/conge');
     if (r.ok) setRuns((await r.json()).runs);
     setLoading(false);
-  }, [year, month]);
+  }, []);
   useEffect(() => { load(); }, [load]);
 
   async function setStatus(run: Run, status: 'approved' | 'refused' | 'pending', note?: string) {
     await fetch('/api/conge', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ doctorId: run.doctorId, year, month, days: run.days, status, note }),
+      body: JSON.stringify({ doctorId: run.doctorId, dates: run.dates, status, note }),
     });
     setRefusingKey(null);
     setRefuseNote('');
@@ -53,37 +61,21 @@ export default function CongesClient() {
   const pending = runs.filter((r) => r.status === 'pending' || r.status === 'mixed');
   const decided = runs.filter((r) => r.status === 'approved' || r.status === 'refused');
 
-  function fmt(run: Run) {
-    const m = MONTHS_FR[month - 1].toLowerCase();
-    return run.length === 1 ? `le ${run.startDay} ${m}` : `du ${run.startDay} au ${run.endDay} ${m} (${run.length} jours)`;
-  }
-
   return (
     <main className="mx-auto max-w-3xl p-6 font-sans text-gray-900">
       <div className="mb-1 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Demandes de congé</h1>
         <AdminNav active="conges" />
       </div>
-      <p className="mb-4 text-sm text-gray-500">Valide ou refuse les congés demandés par les médecins.</p>
-
-      <div className="mb-6 flex flex-wrap items-end gap-3">
-        <label className="text-sm">Mois
-          <select className="ml-2 rounded border border-gray-300 px-2 py-2" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
-            {MONTHS_FR.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-          </select>
-        </label>
-        <label className="text-sm">Année
-          <input type="number" className="ml-2 w-24 rounded border border-gray-300 px-2 py-2" value={year} onChange={(e) => setYear(Number(e.target.value))} />
-        </label>
-      </div>
+      <p className="mb-6 text-sm text-gray-500">Toutes les demandes à venir, de la plus proche à la plus lointaine. Valide ou refuse les congés demandés par les médecins.</p>
 
       {loading ? <p className="text-sm text-gray-400">Chargement…</p> : (
         <>
           <h2 className="mb-2 text-lg font-semibold">À traiter ({pending.length})</h2>
           {pending.length === 0 ? <p className="mb-6 text-sm text-gray-400">Aucune demande en attente.</p> : (
             <ul className="mb-8 space-y-2">
-              {pending.map((run, i) => (
-                <li key={i} className="rounded-lg border border-gray-200 p-3">
+              {pending.map((run) => (
+                <li key={runKey(run)} className="rounded-lg border border-gray-200 p-3">
                   <div className="flex items-center justify-between">
                     <div>
                       <span className="font-medium">{run.name}</span>
@@ -117,8 +109,8 @@ export default function CongesClient() {
           <h2 className="mb-2 text-lg font-semibold">Déjà traités ({decided.length})</h2>
           {decided.length === 0 ? <p className="text-sm text-gray-400">Rien pour l&apos;instant.</p> : (
             <ul className="space-y-2">
-              {decided.map((run, i) => (
-                <li key={i} className="rounded-lg border border-gray-100 p-3">
+              {decided.map((run) => (
+                <li key={runKey(run)} className="rounded-lg border border-gray-100 p-3">
                   <div className="flex items-center justify-between">
                     <div>
                       <span className="font-medium">{run.name}</span>
