@@ -11,7 +11,7 @@ export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export interface CalendarDay {
   day: number;
   weekday: Weekday;
-  isWeekend: boolean; // Saturday or Sunday — used for the "≥1 WE garde / month" rule
+  isWeekend: boolean; // Saturday or Sunday — used by planning.ts/UI for the regular weekly grid
   isHoliday: boolean;
   /** Pénibilité weight for an on-call (garde) that day. */
   penibility: number;
