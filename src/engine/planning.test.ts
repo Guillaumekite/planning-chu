@@ -285,13 +285,27 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
 
   it('when a universitaire is G1 on a Univ day → U+G1 and exactly one BM-BS covers the bloc that day', async () => {
     const docs = doctors(12);
-    // D01 universitaire, fully available, declares EVERY weekday as Univ → any weekday garde lands on
-    // a Univ day, producing U+G1 (or U+G2). This makes at least one U+G1 highly likely.
+    // D01 universitaire declares EVERY weekday as Univ (any weekday garde is a Univ-day garde).
+    // Since the Friday-equity change (3891a71), Fri and Sat are equally "weekend" for fairness, so
+    // the solver no longer has an implicit bias toward placing a constrained doctor's garde on
+    // Friday over Saturday — relying on that bias (as this test used to) is no longer reliable.
+    // Force the scenario deterministically instead: make every doctor EXCEPT D01/D02 unavailable
+    // for garde on one specific Friday (day 3), so the "2 doctors/day" hard constraint forces both
+    // D01 and D02 onto that day; mark D02 `acupuncture: true` so the role balancer pins D02 to G2
+    // (planning.ts's forceG2 rule), leaving D01 as G1 by elimination — guaranteeing a Univ+G1 event
+    // regardless of any other equity-driven placement choice.
     const univAll = weekdaysOf(2026, 4);
+    const forcedFriday = 3; // first Friday of April 2026
+    const availability: Record<string, Record<number, 'no_garde'>> = {};
+    for (const doc of docs) {
+      if (doc === 'D01' || doc === 'D02') continue;
+      availability[doc] = { [forcedFriday]: 'no_garde' };
+    }
     const res = await solvePlanning({
       year: 2026, month: 4, doctors: docs,
-      profiles: { D01: { universitaire: true, universityRatio: 50 } },
+      profiles: { D01: { universitaire: true, universityRatio: 50 }, D02: { acupuncture: true } },
       univConstraints: { D01: univAll },
+      availability,
     });
     if (res.status !== 'feasible') throw new Error('expected feasible');
     let uG1Count = 0;
@@ -323,7 +337,10 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     const blank = weekdays.filter((cd) => !res.grid.D01[cd.day]).length;
     expect(blank).toBeGreaterThanOrEqual(Math.floor(weekdays.length * 0.35));
     expect(blank).toBeLessThanOrEqual(Math.ceil(weekdays.length * 0.65));
-    // A full-timer works every weekday (no blanks).
-    expect(weekdays.filter((cd) => !res.grid.D02[cd.day]).length).toBe(0);
+    // A full-timer can legitimately have a FEW blanks — Monday comp-off after a Sat/Fri garde
+    // (planning.ts:201-219) — but nowhere near the part-timer's ~half-blank TP pattern.
+    const blankD02 = weekdays.filter((cd) => !res.grid.D02[cd.day]).length;
+    expect(blankD02).toBeLessThanOrEqual(4);
+    expect(blankD02).toBeLessThan(blank / 2);
   });
 });
