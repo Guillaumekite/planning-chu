@@ -1,6 +1,7 @@
 // Data access for doctor availability (shared, in the database).
 import { query } from '@/db/client';
 import { ensureSchema } from '@/db/schema';
+import { groupCongeRuns, shiftDays, encodeYMD, type CongeRun, type CongeStatus, type YMD } from './congeRuns';
 
 export type AvailState = 'dispo' | 'souhait_garde' | 'no_garde' | 'conge';
 /** doctor name → (day → state) */
@@ -40,80 +41,60 @@ export async function getAvailability(
   return { availability, congeStatus, congeNote, univ };
 }
 
-export type CongeStatus = 'pending' | 'approved' | 'refused';
-export type CongeRun = {
-  doctorId: number;
-  name: string;
-  startDay: number;
-  endDay: number;
-  length: number;
-  days: number[];
-  status: CongeStatus | 'mixed';
-  note: string | null;
-};
+export type { CongeRun, CongeStatus, YMD } from './congeRuns';
 
-/** List leave requests grouped into consecutive-day runs, for the admin validation screen. */
-export async function listCongeRuns(year: number, month: number): Promise<CongeRun[]> {
-  await ensureSchema();
-  const rows = await query<{ doctor_id: number; name: string; day: number; conge_status: string | null; conge_note: string | null }>(
-    `SELECT a.doctor_id, d.name, a.day, a.conge_status, a.conge_note
-     FROM availability a JOIN doctors d ON d.id = a.doctor_id
-     WHERE a.year = $1 AND a.month = $2 AND a.state = 'conge'
-     ORDER BY d.name, a.day`,
-    [year, month],
-  );
-  const runs: CongeRun[] = [];
-  let cur: CongeRun | null = null;
-  let statuses: Set<string> = new Set();
-  let notes: Set<string> = new Set();
-  const flush = () => {
-    if (cur) {
-      cur.length = cur.days.length;
-      cur.endDay = cur.days[cur.days.length - 1];
-      cur.status = statuses.size === 1 ? ([...statuses][0] as CongeStatus) : 'mixed';
-      cur.note = notes.size ? [...notes].join(' ') : null;
-      runs.push(cur);
-    }
-    cur = null;
-    statuses = new Set();
-    notes = new Set();
-  };
-  for (const r of rows) {
-    const st = r.conge_status ?? 'pending';
-    if (cur && cur.doctorId === r.doctor_id && r.day === cur.days[cur.days.length - 1] + 1) {
-      cur.days.push(r.day);
-    } else {
-      flush();
-      cur = { doctorId: r.doctor_id, name: r.name, startDay: r.day, endDay: r.day, length: 1, days: [r.day], status: 'pending', note: null };
-    }
-    statuses.add(st);
-    if (r.conge_note) notes.add(r.conge_note);
-  }
-  flush();
-  return runs;
+/** Today's calendar date in the Europe/Paris timezone. */
+function parisToday(): YMD {
+  const s = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' }); // "YYYY-MM-DD"
+  const [year, month, day] = s.split('-').map(Number);
+  return { year, month, day };
 }
 
 /**
- * Set the approval status on specific leave days for a doctor. An optional `note`
- * (the admin's reason) is stored only when refusing; approving or resetting to
- * pending clears any previous note.
+ * All upcoming leave requests, grouped into consecutive-day blocks, across every
+ * month. A block is kept when its end date is >= (today - 7 days). The SQL prefilter
+ * reaches 45 days further back so a long ongoing block keeps its true start day.
+ */
+export async function listCongeRuns(): Promise<CongeRun[]> {
+  await ensureSchema();
+  const floor = shiftDays(parisToday(), -7);
+  const prefilter = shiftDays(floor, -45);
+  const rows = await query<{ doctor_id: number; name: string; year: number; month: number; day: number; conge_status: string | null; conge_note: string | null }>(
+    `SELECT a.doctor_id, d.name, a.year, a.month, a.day, a.conge_status, a.conge_note
+     FROM availability a JOIN doctors d ON d.id = a.doctor_id
+     WHERE a.state = 'conge' AND (a.year * 10000 + a.month * 100 + a.day) >= $1
+     ORDER BY a.doctor_id, a.year, a.month, a.day`,
+    [encodeYMD(prefilter)],
+  );
+  return groupCongeRuns(
+    rows.map((r) => ({
+      doctorId: r.doctor_id, name: r.name, year: r.year, month: r.month, day: r.day,
+      congeStatus: r.conge_status, congeNote: r.conge_note,
+    })),
+    floor,
+  );
+}
+
+/**
+ * Set the approval status on specific leave dates for a doctor. Dates may span
+ * several months (a leave straddling a month boundary). An optional `note` is stored
+ * only when refusing and non-empty; approving or resetting to pending clears it.
  */
 export async function setCongeStatus(
   doctorId: number,
-  year: number,
-  month: number,
-  days: number[],
+  dates: YMD[],
   status: CongeStatus,
   note?: string | null,
 ): Promise<void> {
-  if (!days.length) return;
+  if (!dates.length) return;
   await ensureSchema();
   const cleanNote = status === 'refused' && note && note.trim() ? note.trim() : null;
-  const placeholders = days.map((_, i) => `$${i + 5}`).join(', ');
+  const encoded = dates.map(encodeYMD);
+  const placeholders = encoded.map((_, i) => `$${i + 4}`).join(', ');
   await query(
     `UPDATE availability SET conge_status = $1, conge_note = $2
-     WHERE doctor_id = $3 AND year = $4 AND day IN (${placeholders}) AND state = 'conge' AND month = $${days.length + 5}`,
-    [status, cleanNote, doctorId, year, ...days, month],
+     WHERE doctor_id = $3 AND state = 'conge' AND (year * 10000 + month * 100 + day) IN (${placeholders})`,
+    [status, cleanNote, doctorId, ...encoded],
   );
 }
 
