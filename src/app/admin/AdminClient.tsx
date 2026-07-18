@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import AdminNav from '@/components/AdminNav';
 import { MONTHS_FR } from '@/lib/store';
 import PlanningGrid, { type GridDay } from '@/components/PlanningGrid';
 import { weekdayOf, daysInMonth } from '@/engine/calendar';
@@ -162,20 +163,11 @@ export default function AdminClient() {
     if (res.ok) { await loadPublished(); setResult(null); }
   }
 
-  async function logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    window.location.href = '/';
-  }
-
   return (
     <main className="mx-auto max-w-[1400px] p-6 font-sans text-gray-900">
       <div className="mb-1 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Admin — Planning des gardes</h1>
-        <div className="flex items-center gap-4 text-sm">
-          <Link href="/admin/conges" className="font-medium text-blue-600 hover:underline">Congés</Link>
-          <Link href="/disponibilites" className="font-medium text-blue-600 hover:underline">Disponibilités</Link>
-          <button onClick={logout} className="text-gray-500 hover:text-red-600">Déconnexion</button>
-        </div>
+        <AdminNav active="planning" />
       </div>
       <p className="mb-6 text-sm text-gray-500">Médecins, profils et comptes sont enregistrés dans la base partagée.</p>
 

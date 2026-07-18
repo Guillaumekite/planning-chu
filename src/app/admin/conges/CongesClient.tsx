@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
+import AdminNav from '@/components/AdminNav';
 import { MONTHS_FR } from '@/lib/store';
 
 type Run = {
@@ -62,7 +62,7 @@ export default function CongesClient() {
     <main className="mx-auto max-w-3xl p-6 font-sans text-gray-900">
       <div className="mb-1 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Demandes de congé</h1>
-        <Link href="/admin" className="text-sm font-medium text-blue-600 hover:underline">← Admin</Link>
+        <AdminNav active="conges" />
       </div>
       <p className="mb-4 text-sm text-gray-500">Valide ou refuse les congés demandés par les médecins.</p>
 
