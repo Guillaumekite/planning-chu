@@ -127,14 +127,28 @@ describe('solvePlanning — gardes & structure', () => {
     expect(res.grid.D01[8]).toBeTruthy();
   });
 
-  it('honours souhait_garde as a garde wish where possible', async () => {
+  it('G+ (souhait_garde) is HARD: with ≤2 wishers on a day, the wisher gets the garde', async () => {
     const res = await solvePlanning({
       year: 2026, month: 4, doctors: doctors(12),
       availability: { D01: { 9: 'souhait_garde' } },
     });
     if (res.status !== 'feasible') throw new Error('expected feasible');
-    // The wish is a soft preference; at minimum it never prevents a valid plan.
-    expect(res.status).toBe('feasible');
+    expect(['G1', 'G2']).toContain(res.grid.D01[9]); // the wished garde is guaranteed
+    expect(res.warnings.filter((w) => w.includes('G+'))).toHaveLength(0); // honored cleanly
+  });
+
+  it('3+ G+ on the same day: both slots go to wishers, and the admin is warned', async () => {
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: doctors(12),
+      availability: {
+        D01: { 9: 'souhait_garde' }, D02: { 9: 'souhait_garde' }, D03: { 9: 'souhait_garde' },
+      },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const holders = doctors(12).filter((d) => ['G1', 'G2'].includes(res.grid[d][9]));
+    expect(holders.length).toBe(2);
+    for (const doc of holders) expect(['D01', 'D02', 'D03']).toContain(doc);
+    expect(res.warnings.some((w) => w.includes('3 G+'))).toBe(true);
   });
 });
 
@@ -168,13 +182,19 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     expect(pedSeen).toBeGreaterThan(0);
   });
 
-  it('CD appears with ≥9 present but not with a small roster', async () => {
+  it('CD appears when capacity exceeds the core posts, never at their expense', async () => {
     const profiles = { D01: { douleurPoids: 1 }, D02: { douleurPoids: 1 } };
     const big = await solvePlanning({ year: 2026, month: 4, doctors: doctors(12), profiles });
-    const small = await solvePlanning({ year: 2026, month: 4, doctors: doctors(8), profiles });
+    // 9 working → the pool is exactly consumed by the mandatory core (2 BM, S, CS1, CS2) → no CD.
+    const small = await solvePlanning({ year: 2026, month: 4, doctors: doctors(9), profiles });
     if (big.status !== 'feasible' || small.status !== 'feasible') throw new Error('expected feasible');
     const cdBig = big.days.reduce((s, cd) => s + doctors(12).filter((d) => big.grid[d][cd.day] === 'CD').length, 0);
-    const cdSmall = small.days.reduce((s, cd) => s + doctors(8).filter((d) => small.grid[d][cd.day] === 'CD').length, 0);
+    // Day 1 has no RS from a previous day → real spare capacity → a CD there is legitimate.
+    // From day 2 on, 2 gardes + 2 RS leave the pool exactly equal to the core → never a CD.
+    const cdSmall = small.days.reduce(
+      (s, cd) => s + (cd.day >= 2 ? doctors(9).filter((d) => small.grid[d][cd.day] === 'CD').length : 0),
+      0,
+    );
     expect(cdBig).toBeGreaterThan(0);
     expect(cdSmall).toBe(0);
   });
@@ -223,14 +243,80 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     expect(cdTotal).toBe(0);
   });
 
-  it('P appears with ≥10 present but not with a small roster', async () => {
+  it('staffing table: 2 BM + S + CS1 + CS2 at 9 working; a 3rd BM at ≥10; P no longer exists', async () => {
     const big = await solvePlanning({ year: 2026, month: 4, doctors: doctors(12) });
-    const small = await solvePlanning({ year: 2026, month: 4, doctors: doctors(8) });
-    if (big.status !== 'feasible' || small.status !== 'feasible') throw new Error('expected feasible');
-    const pBig = big.days.reduce((s, cd) => s + doctors(12).filter((d) => big.grid[d][cd.day] === 'P').length, 0);
-    const pSmall = small.days.reduce((s, cd) => s + doctors(8).filter((d) => small.grid[d][cd.day] === 'P').length, 0);
-    expect(pBig).toBeGreaterThan(0);
-    expect(pSmall).toBe(0);
+    const nine = await solvePlanning({ year: 2026, month: 4, doctors: doctors(9) });
+    if (big.status !== 'feasible' || nine.status !== 'feasible') throw new Error('expected feasible');
+    // The P post was replaced by the 3rd BM rule — it must never appear.
+    for (const res of [big, nine]) {
+      for (const cd of res.days) for (const doc of Object.keys(res.grid)) expect(res.grid[doc][cd.day]).not.toBe('P');
+    }
+    const bmCount = (res: typeof big, day: number, docs: string[]) =>
+      docs.filter((d) => res.grid[d][day] === 'BM').length;
+    for (const cd of nine.days) {
+      if (cd.isWeekend || cd.isHoliday) continue;
+      // 9 working: mandatory core = 2 BM, 1 S, CS1, CS2 — exactly, no spare for a 3rd BM.
+      expect(bmCount(nine, cd.day, doctors(9))).toBe(2);
+      expect(doctors(9).filter((d) => nine.grid[d][cd.day] === 'S').length).toBe(1);
+      expect(doctors(9).filter((d) => nine.grid[d][cd.day] === 'CS1').length).toBe(1);
+      expect(doctors(9).filter((d) => nine.grid[d][cd.day] === 'CS2').length).toBe(1);
+    }
+    // 12 on the roster: Tuesdays (no Ped, no CD, no comp-off effect on the count) get the 3rd BM.
+    let checkedTuesdays = 0;
+    for (const cd of big.days) {
+      if (cd.weekday !== 1 || cd.isHoliday) continue;
+      expect(bmCount(big, cd.day, doctors(12))).toBe(3);
+      checkedTuesdays++;
+    }
+    expect(checkedTuesdays).toBeGreaterThan(0);
+  });
+
+  it('at 8 working, a single CS runs each day, alternating so CS1/CS2 stay even per week', async () => {
+    // 9 doctors, one on congé for two full weeks → 8 working on those weekdays only.
+    const docs = doctors(9);
+    const conge: Record<number, 'conge'> = {};
+    for (let d = 6; d <= 19; d++) conge[d] = 'conge'; // Mon 6 → Sun 19 (April 2026)
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, availability: { D09: conge } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const csOn = (day: number) => ({
+      cs1: docs.filter((d) => res.grid[d][day] === 'CS1').length,
+      cs2: docs.filter((d) => res.grid[d][day] === 'CS2').length,
+    });
+    let weekCs1 = 0, weekCs2 = 0;
+    for (const cd of res.days) {
+      if (cd.isWeekend || cd.isHoliday) continue;
+      const { cs1, cs2 } = csOn(cd.day);
+      if (cd.day >= 6 && cd.day <= 19) {
+        expect(cs1 + cs2).toBe(1); // 8 working → exactly one CS, never both
+        weekCs1 += cs1; weekCs2 += cs2;
+      } else {
+        expect(cs1).toBe(1); // 9 working → both consultations run
+        expect(cs2).toBe(1);
+      }
+    }
+    expect(Math.abs(weekCs1 - weekCs2)).toBeLessThanOrEqual(1); // alternation keeps them even
+  });
+
+  it('MM/MS runs ONLY when the acupuncture doctor is on garde AND ≥ 12 are working', async () => {
+    const docs = doctors(13);
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D02: { acupuncture: true } } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    let matSeen = 0;
+    for (const cd of res.days) {
+      if (cd.isWeekend || cd.isHoliday) continue;
+      const mat = docs.filter((d) => ['MM', 'MS'].includes(res.grid[d][cd.day]));
+      const dziOnGarde = ['G1', 'G2', 'ACU+G2', 'U+G1', 'U+G2'].includes(res.grid.D02[cd.day]);
+      if (!dziOnGarde) expect(mat.length).toBe(0); // no maternity post without the acu doctor on garde
+      matSeen += mat.length;
+    }
+    expect(matSeen).toBeGreaterThan(0); // …but it does run on (some of) her garde days
+
+    // Below 12 working, never — even when she IS on garde.
+    const small = await solvePlanning({ year: 2026, month: 4, doctors: doctors(11), profiles: { D02: { acupuncture: true } } });
+    if (small.status !== 'feasible') throw new Error('expected feasible');
+    for (const cd of small.days) {
+      expect(doctors(11).filter((d) => ['MM', 'MS'].includes(small.grid[d][cd.day])).length).toBe(0);
+    }
   });
 
   it('gives fewer gardes to a doctor on long leave, but the same to one with only 1-2 leave days', async () => {
@@ -337,10 +423,9 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     const blank = weekdays.filter((cd) => !res.grid.D01[cd.day]).length;
     expect(blank).toBeGreaterThanOrEqual(Math.floor(weekdays.length * 0.35));
     expect(blank).toBeLessThanOrEqual(Math.ceil(weekdays.length * 0.65));
-    // A full-timer can legitimately have a FEW blanks — Monday comp-off after a Saturday garde
-    // (planning.ts:201-219; at this team size of 12, only Saturday gardes trigger it, Friday
-    // comp-off needs > 12) — but nowhere near the part-timer's ~half-blank TP pattern. The <=4
-    // ceiling covers a handful of Saturday comp-offs across the month (2 observed here).
+    // A full-timer can legitimately have a FEW blanks — Monday récup after a Saturday garde,
+    // granted only when ≥ 12 doctors actually WORK that Monday — but nowhere near the part-timer's
+    // ~half-blank TP pattern. The <=4 ceiling covers a handful of Saturday récups over the month.
     const blankD02 = weekdays.filter((cd) => !res.grid.D02[cd.day]).length;
     expect(blankD02).toBeLessThanOrEqual(4);
     expect(blankD02).toBeLessThan(blank / 2);

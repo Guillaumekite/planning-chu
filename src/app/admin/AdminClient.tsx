@@ -14,7 +14,7 @@ type Doctor = {
 type ApiDay = { day: number; weekday: number; isWeekend: boolean; isHoliday: boolean };
 type Equity = { count: Record<string, number>; weekendCount: Record<string, number>; heavyCount: Record<string, number>; spread: number };
 type GenResult =
-  | { status: 'feasible'; days: ApiDay[]; grid: Record<string, Record<number, string>>; gardeEquity: Equity }
+  | { status: 'feasible'; days: ApiDay[]; grid: Record<string, Record<number, string>>; gardeEquity: Equity; warnings?: string[] }
   | { status: 'infeasible'; day: number; reason: string; eligible: string[] }
   | { error: string };
 // A published planning as returned by GET /api/plannings (snake_case column names).
@@ -292,6 +292,14 @@ export default function AdminClient() {
               {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
               <span className="text-sm text-gray-500">Brouillon généré, non encore publié.</span>
             </div>
+            {draft.warnings && draft.warnings.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">⚠️ À vérifier avant de publier ({draft.warnings.length})</p>
+                <ul className="mt-1 list-disc pl-5">
+                  {draft.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            )}
             <PlanningGrid days={draft.days} grid={draft.grid} doctors={active.map((d) => d.name)} />
             <EquityTable equity={draft.gardeEquity} doctors={active.map((d) => d.name)} />
           </div>

@@ -90,7 +90,13 @@ export interface EquityReport {
 }
 
 export type GardeResult =
-  | { status: 'feasible'; assignments: GardeAssignment[]; equity: EquityReport }
+  | {
+      status: 'feasible';
+      assignments: GardeAssignment[];
+      equity: EquityReport;
+      /** Non-blocking issues the admin must see (G+ non honorables, jours surchargés…). */
+      warnings: string[];
+    }
   | {
       status: 'infeasible';
       day: number;
