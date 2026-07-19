@@ -21,13 +21,14 @@ export type DoctorRow = {
   part_time_ratio: number;
   acupuncture: boolean;
   douleur_poids: number;
+  force_g2: boolean;
   has_account: boolean;
 };
 
 export async function listDoctors(): Promise<DoctorRow[]> {
   await ensureSchema();
   return query<DoctorRow>(
-    `SELECT d.id, d.name, d.universitaire, d.university_ratio, d.part_time, d.part_time_ratio, d.acupuncture, d.douleur_poids,
+    `SELECT d.id, d.name, d.universitaire, d.university_ratio, d.part_time, d.part_time_ratio, d.acupuncture, d.douleur_poids, d.force_g2,
             (u.id IS NOT NULL) AS has_account
      FROM doctors d
      LEFT JOIN users u ON u.doctor_id = d.id
@@ -39,13 +40,13 @@ export async function createDoctor(name: string): Promise<DoctorRow> {
   await ensureSchema();
   const row = await queryOne<DoctorRow>(
     `INSERT INTO doctors (name) VALUES ($1)
-     RETURNING id, name, universitaire, university_ratio, part_time, part_time_ratio, acupuncture, douleur_poids, false AS has_account`,
+     RETURNING id, name, universitaire, university_ratio, part_time, part_time_ratio, acupuncture, douleur_poids, force_g2, false AS has_account`,
     [name],
   );
   return row!;
 }
 
-const EDITABLE = ['name', 'universitaire', 'university_ratio', 'part_time', 'part_time_ratio', 'acupuncture', 'douleur_poids'] as const;
+const EDITABLE = ['name', 'universitaire', 'university_ratio', 'part_time', 'part_time_ratio', 'acupuncture', 'douleur_poids', 'force_g2'] as const;
 
 export async function updateDoctor(id: number, patch: Record<string, unknown>): Promise<void> {
   const sets: string[] = [];

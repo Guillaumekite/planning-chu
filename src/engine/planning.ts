@@ -45,6 +45,9 @@ export interface DoctorProfile {
   acupuncture?: boolean;
   /** Consultation douleur (CD) weight: 0 = not eligible (default), 1 = simple, 2 = double (Esbuy). */
   douleurPoids?: number;
+  /** "Jamais G1" : never the G1 role, only G2 (Dr Dzierzek — back problems). Independent of
+   * acupuncture, even though today the same person carries both flags. */
+  forceG2?: boolean;
 }
 
 export interface PlanningInput {
@@ -153,6 +156,9 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // Acupuncture doctors do ACU on Mondays but stay normal for garde eligibility. If the schedule
   // puts one on a Monday garde, it must be G2 (evening from 18h) — see the G2-forcing step below.
   const acupuncture = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acupuncture));
+  // "Jamais G1" — doctors who NEVER take the G1 role (Dzierzek: back problems). Independent flag,
+  // plus the acupuncture doctors (their evening-G2-after-ACU rule still requires G2-only).
+  const neverG1 = new Set(doctors.filter((doc) => input.profiles?.[doc]?.forceG2 || input.profiles?.[doc]?.acupuncture));
 
   // University-constraint days ("Univ") the doctor declared themselves. Honored only for universitaire
   // doctors and only on weekdays (university is a weekday activity). A doctor with ≥1 declared day gets
@@ -186,8 +192,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const gardeInput: GardeInput = {
     year: input.year, month: input.month, doctors,
     gardeBlocked, holidays: input.holidays, wishes, fte: gardeWeight,
-    // Acupuncture doctors are ALWAYS G2, never G1 (permanent rule) — handled by the role balancer.
-    forceG2: [...acupuncture],
+    // "Jamais G1" doctors (Dzierzek) + acupuncture doctors are ALWAYS G2 — role balancer rule.
+    forceG2: [...neverG1],
   };
   const gardes = await solveGardes(gardeInput);
   if (gardes.status === 'infeasible') return gardes;
@@ -202,8 +208,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // G1s and her ACU disappeared" symptom — so surface it loudly instead of failing silently.
   if (acuOn && acupuncture.size === 0) {
     warnings.push(
-      'Acupuncture activée mais aucun médecin du roster n\'a le profil « Acu lun. » : aucun ACU ne sera posé ' +
-        'et aucun médecin n\'est forcé en G2. Vérifie la fiche du médecin acupuncture.',
+      'Acupuncture activée mais aucun médecin du roster n\'a le profil « Acu lun. » : aucun ACU ne sera posé. ' +
+        'Vérifie la fiche du médecin acupuncture (et la case « Jamais G1 » pour Dzierzek).',
     );
   }
 
@@ -271,12 +277,14 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
   // "Travaillants" — the REAL daily headcount every staffing threshold uses (never the number of
   // doctors merely checked on the roster): on the roster, not on congé, not on a part-time off
-  // day, not on récup, and not at the university that day (U/U+G1/U+G2 — a universitaire may
-  // still hold an evening garde but is absent from the day service). G1, G2, RS and ACU count.
+  // day, and not at the university that day (U/U+G1/U+G2 — a universitaire may still hold an
+  // evening garde but is absent from the day service). G1, G2, RS, ACU — and RÉCUP days — all
+  // COUNT as working ("nous sommes 12 à travailler y compris les RS"); récup doctors are simply
+  // not assignable to a post (the Pass-3 pool excludes them).
   const U_CELLS = new Set(['U', 'U+G1', 'U+G2']);
   const compOff = new Set<string>(); // `${doctor}|${day}`
   const isWorking = (doc: DoctorId, day: number) =>
-    basePresent(doc, day) && !compOff.has(`${doc}|${day}`) && !U_CELLS.has(grid[doc][day] ?? '');
+    basePresent(doc, day) && !U_CELLS.has(grid[doc][day] ?? '');
   const workingCount = (day: number) => doctors.filter((d) => isWorking(d, day)).length;
 
   // Acupuncture (Mondays + Wednesdays), only when ≥ 9 doctors work that day (below that, every
@@ -349,7 +357,11 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     if (cd.isWeekend || cd.isHoliday) continue;
 
     const working = workingCount(cd.day);
-    let pool = doctors.filter((doc) => isWorking(doc, cd.day) && !grid[doc][cd.day]);
+    // Assignable pool: working, no cell yet, and not on récup (récup counts in `working` but
+    // stays blank — the doctor is resting).
+    let pool = doctors.filter(
+      (doc) => isWorking(doc, cd.day) && !grid[doc][cd.day] && !compOff.has(`${doc}|${cd.day}`),
+    );
 
     const assign = (doc: DoctorId, post: string) => {
       grid[doc][cd.day] = post;

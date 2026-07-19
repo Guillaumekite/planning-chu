@@ -13,6 +13,7 @@ const ProfileSchema = z.object({
   fte: z.number().min(0).max(1).optional(),
   acupuncture: z.boolean().optional(),
   douleurPoids: z.number().int().min(0).max(2).optional(),
+  forceG2: z.boolean().optional(), // "Jamais G1" — jamais le rôle G1 (ex. Dzierzek)
 });
 
 const BodySchema = z.object({

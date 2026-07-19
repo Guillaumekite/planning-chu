@@ -72,6 +72,18 @@ describe('solvePlanning — gardes & structure', () => {
     for (const cd of res.days) expect(res.grid.D02[cd.day]).not.toBe('G1'); // never G1
   });
 
+  it('« Jamais G1 » (forceG2) : never the G1 role, even without the acupuncture flag', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D03: { forceG2: true } } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    for (const cd of res.days) {
+      expect(res.grid.D03[cd.day]).not.toBe('G1');
+      expect(res.grid.D03[cd.day]).not.toBe('U+G1');
+    }
+    // She still takes gardes — as G2 only.
+    expect(res.days.filter((cd) => res.grid.D03[cd.day] === 'G2').length).toBeGreaterThan(0);
+  });
+
   it('disables ACU entirely when the acupuncture flag is off', async () => {
     const docs = doctors(12);
     const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D02: { acupuncture: true } }, acupuncture: false });

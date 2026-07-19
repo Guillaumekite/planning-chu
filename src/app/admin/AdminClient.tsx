@@ -9,7 +9,8 @@ import { weekdayOf, daysInMonth } from '@/engine/calendar';
 
 type Doctor = {
   id: number; name: string; universitaire: boolean; university_ratio: number;
-  part_time: boolean; part_time_ratio: number; acupuncture: boolean; douleur_poids: number; has_account: boolean;
+  part_time: boolean; part_time_ratio: number; acupuncture: boolean; douleur_poids: number;
+  force_g2: boolean; has_account: boolean;
 };
 type ApiDay = { day: number; weekday: number; isWeekend: boolean; isHoliday: boolean };
 type Equity = { count: Record<string, number>; weekendCount: Record<string, number>; heavyCount: Record<string, number>; spread: number };
@@ -129,7 +130,7 @@ export default function AdminClient() {
       const uDays = Object.entries(perDay).filter(([, v]) => v).map(([d]) => Number(d));
       if (uDays.length) univConstraints[name] = uDays;
     }
-    type Profile = { universitaire?: boolean; universityRatio?: number; fte?: number; acupuncture?: boolean; douleurPoids?: number };
+    type Profile = { universitaire?: boolean; universityRatio?: number; fte?: number; acupuncture?: boolean; douleurPoids?: number; forceG2?: boolean };
     const profiles: Record<string, Profile> = {};
     for (const d of active) {
       const p: Profile = {};
@@ -137,6 +138,7 @@ export default function AdminClient() {
       if (d.part_time) p.fte = Math.max(0, Math.min(100, d.part_time_ratio || 100)) / 100;
       if (d.acupuncture) p.acupuncture = true;
       if (d.douleur_poids) p.douleurPoids = d.douleur_poids;
+      if (d.force_g2) p.forceG2 = true; // « Jamais G1 » (ex. Dzierzek)
       if (Object.keys(p).length) profiles[d.name] = p;
     }
     setLoading(true);
@@ -202,6 +204,7 @@ export default function AdminClient() {
                   <th className="pr-4">Univ.</th><th className="pr-4">% fac</th>
                   <th className="pr-4">Tps partiel</th><th className="pr-4">% prés.</th>
                   <th className="pr-4">Acu lun.</th>
+                  <th className="pr-4" title="Ce médecin ne prend jamais le rôle G1 (uniquement G2)">Jamais G1</th>
                   <th className="pr-4">Douleur</th>
                   <th className="pr-4">Compte</th><th></th>
                 </tr>
@@ -216,6 +219,7 @@ export default function AdminClient() {
                     <td className="pr-4"><input type="checkbox" checked={d.part_time} onChange={(e) => patchDoctor(d.id, { part_time: e.target.checked })} /></td>
                     <td className="pr-4">{d.part_time && <input type="number" min={0} max={100} className="w-14 rounded border border-gray-300 px-1 py-0.5" value={d.part_time_ratio} onChange={(e) => patchDoctor(d.id, { part_time_ratio: Number(e.target.value) })} />}</td>
                     <td className="pr-4"><input type="checkbox" checked={d.acupuncture} onChange={(e) => patchDoctor(d.id, { acupuncture: e.target.checked })} /></td>
+                    <td className="pr-4"><input type="checkbox" checked={d.force_g2} onChange={(e) => patchDoctor(d.id, { force_g2: e.target.checked })} title="Jamais G1 — uniquement G2" /></td>
                     <td className="pr-4">
                       <select className="rounded border border-gray-300 px-1 py-0.5" value={d.douleur_poids ?? 0} onChange={(e) => patchDoctor(d.id, { douleur_poids: Number(e.target.value) })}>
                         <option value={0}>Non</option>

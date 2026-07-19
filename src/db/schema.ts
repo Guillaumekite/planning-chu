@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS doctors (
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS acupuncture boolean NOT NULL DEFAULT false;
 -- Consultation douleur (CD) weight: 0 = not eligible, 1 = simple, 2 = double (Esbuy).
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS douleur_poids integer NOT NULL DEFAULT 0;
+-- "Jamais G1" : ce médecin ne prend JAMAIS le rôle G1 (ex. Dzierzek, mal de dos) — indépendant
+-- de l'acupuncture, même si en pratique c'est la même personne aujourd'hui.
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS force_g2 boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS users (
   id                   serial PRIMARY KEY,
@@ -105,6 +108,18 @@ async function runConfigMigrations(): Promise<void> {
     );
     await query(
       `INSERT INTO app_config (key, value) VALUES ('admin_pw_reset_v1', 'done') ON CONFLICT (key) DO NOTHING`,
+    );
+  }
+
+  // v2: seed the new "Jamais G1" flag from the acupuncture flag — the acupuncture doctor
+  // (Dzierzek) is the one who must never be G1. Runs once; the admin can adjust afterwards.
+  const seeded = await queryOne<{ value: string }>(
+    `SELECT value FROM app_config WHERE key = 'force_g2_seed_v1'`,
+  );
+  if (!seeded) {
+    await query(`UPDATE doctors SET force_g2 = true WHERE acupuncture = true`);
+    await query(
+      `INSERT INTO app_config (key, value) VALUES ('force_g2_seed_v1', 'done') ON CONFLICT (key) DO NOTHING`,
     );
   }
 }

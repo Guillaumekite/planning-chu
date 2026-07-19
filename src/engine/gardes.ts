@@ -9,6 +9,7 @@
 
 import GLPKFactory from 'glpk.js/node';
 import { buildMonth } from './calendar';
+import { mulberry32 } from './rng';
 import {
   DEFAULT_WEIGHTS,
   type GardeInput,
@@ -28,10 +29,8 @@ const MAX_GARDES_PER_MONTH = 7;
 
 /** Wish-forcing decisions derived from G+ days, handed to the MILP and the local search. */
 type WishPlan = {
-  /** `${day}|${doc}` — garde REQUIRED (≤2 wishers that day). */
+  /** `${day}|${doc}` — garde REQUIRED (wisher with ≤2 wishers that day, or drawn by lot at ≥3). */
   forced: Set<string>;
-  /** day → wishers; on these days (≥3 wishers) the 2 slots are RESERVED to wishers. */
-  reserved: Map<number, Set<DoctorId>>;
   /** Per-doctor monthly cap (7, or the wish count when > 7). */
   cap: Record<DoctorId, number>;
 };
@@ -81,19 +80,27 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
     }
     if (kept.length) keptWishes[doc] = kept;
   }
-  // Per day: ≤2 wishers → each is FORCED; ≥3 → the day's 2 slots are RESERVED to wishers.
+  // Per day: ≤2 wishers → each is FORCED; ≥3 → the 2 winners are DRAWN BY LOT (deterministic,
+  // seeded by year/month/day so regenerating the same month gives the same draw) and forced.
   const wishersByDay: Record<number, DoctorId[]> = {};
   for (const [doc, ds] of Object.entries(keptWishes)) for (const d of ds) (wishersByDay[d] ??= []).push(doc);
   const forced = new Set<string>();
-  const reserved = new Map<number, Set<DoctorId>>();
   for (const [dStr, docsW] of Object.entries(wishersByDay)) {
     const d = Number(dStr);
     if (docsW.length <= 2) {
       for (const doc of docsW) forced.add(`${d}|${doc}`);
     } else {
-      reserved.set(d, new Set(docsW));
+      const pool = [...docsW].sort(); // stable base order, then seeded Fisher-Yates shuffle
+      const rng = mulberry32(((input.year * 100 + input.month) * 100 + d) >>> 0);
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      const winners = pool.slice(0, 2).sort();
+      const losers = pool.slice(2).sort();
+      for (const doc of winners) forced.add(`${d}|${doc}`);
       warnings.push(
-        `${docsW.length} G+ le ${d} pour 2 places : gardes réservées aux demandeurs (${[...docsW].sort().join(', ')}), ${docsW.length - 2} ne l'auront pas.`,
+        `${docsW.length} G+ le ${d} pour 2 places : tirage au sort → retenus ${winners.join(' et ')} ; non retenu(s) : ${losers.join(', ')}.`,
       );
     }
   }
@@ -133,10 +140,10 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   }
 
   // ---- Step 1: feasibility MILP (fast), G+ forcés ; retry sans forçage si infaisable ----
-  let plan: WishPlan = { forced, reserved, cap };
+  let plan: WishPlan = { forced, cap };
   let feasible = await solveFeasibility(input, days, weights, plan);
-  if (!feasible && (forced.size > 0 || reserved.size > 0)) {
-    plan = { forced: new Set(), reserved: new Map(), cap };
+  if (!feasible && forced.size > 0) {
+    plan = { forced: new Set(), cap };
     feasible = await solveFeasibility(input, days, weights, plan);
     if (feasible) {
       warnings.push(
@@ -365,9 +372,7 @@ async function solveFeasibility(
   const doctors = input.doctors;
   const blocked = input.gardeBlocked ?? {};
   const isBlocked = (d: number, doc: DoctorId) => (blocked[doc] ?? []).includes(d);
-  // Eligibility = not blocked AND, on a reserved day (≥3 G+), being one of the wishers.
-  const allowed = (d: number, doc: DoctorId) =>
-    !isBlocked(d, doc) && (!plan.reserved.has(d) || plan.reserved.get(d)!.has(doc));
+  const allowed = (d: number, doc: DoctorId) => !isBlocked(d, doc);
 
   type Term = { name: string; coef: number };
   const dayVars: Record<number, Term[]> = {};
@@ -487,10 +492,9 @@ function polishEquity(
   const N = days.length; // number of calendar days in the month
   const hasGarde = (doc: DoctorId, day: number) => dayList[doc].has(day);
   // b can take day d only if it keeps a ≥3-day gap: no garde on d-2,d-1,d+1,d+2 (and not on d) —
-  // and it must respect the wish plan: reserved days stay with wishers, the monthly cap holds.
+  // and it must respect the wish plan: the monthly cap holds (forced G+ days never move at all).
   const canTake = (b: DoctorId, d: number) =>
     !isBlocked(d, b) &&
-    (!plan.reserved.has(d) || plan.reserved.get(d)!.has(b)) &&
     monthCount[b] < (plan.cap[b] ?? MAX_GARDES_PER_MONTH) &&
     !hasGarde(b, d) &&
     !hasGarde(b, d - 1) && !hasGarde(b, d + 1) &&

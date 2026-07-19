@@ -23,8 +23,9 @@ Spec issue du retour utilisateur du 2026-07-19 (3 points) + reproduction empiriq
 - **G+** (`souhait_garde`), nouveau — contraintes dures + avertissements :
   - Par jour, W(d) = médecins ayant posé G+ ce jour et non bloqués.
   - |W(d)| ≤ 2 → chaque médecin de W(d) reçoit **obligatoirement** une garde ce jour (MILP fixe).
-  - |W(d)| ≥ 3 → les 2 places du jour sont **réservées** aux membres de W(d) (les autres médecins
-    sont exclus ce jour) + warning « k G+ pour 2 places le jour d ».
+  - |W(d)| ≥ 3 → les 2 gagnants sont **tirés au sort** parmi W(d) (tirage déterministe, seedé par
+    année/mois/jour : regénérer le même mois redonne le même tirage) et forcés ; warning listant
+    retenus et non-retenus. [amendé 2026-07-19 : tirage au sort au lieu de la simple réservation]
   - Vœu sur jour bloqué (congé, G−, TP) → ignoré + warning.
   - Deux G+ du même médecin espacés de < 3 jours → seul le premier est forcé + warning
     (règle de repos).
@@ -41,11 +42,19 @@ Spec issue du retour utilisateur du 2026-07-19 (3 points) + reproduction empiriq
 `workingCount(jour)` = médecins du roster qui, ce jour :
 - ne sont pas en congé (CA),
 - ne sont pas en jour non travaillé de temps partiel (TP),
-- ne sont pas en récup (comp-off),
 - ne sont pas en U / U+G1 / U+G2 (un universitaire à la fac n'est pas présent en journée —
   il peut faire une garde le soir, sauf veille d'un jour Univ, règle existante conservée).
-G1, G2, RS et ACU comptent comme travaillants. Tous les seuils ci-dessous utilisent ce compte,
+G1, G2, RS, ACU **et les jours de récup** comptent comme travaillants (« nous sommes 12 à
+travailler y compris les RS ») — un médecin en récup compte dans l'effectif mais n'est pas
+affectable à un poste. [amendé 2026-07-19] Tous les seuils ci-dessous utilisent ce compte,
 plus jamais le nombre de cochés.
+
+### B-bis. « Jamais G1 » (amendé 2026-07-19)
+La règle « toujours G2, jamais G1 » concerne le **médecin Dzierzek** (mal de dos), pas
+l'acupuncture en soi. Nouveau flag `force_g2` (« Jamais G1 ») sur la fiche médecin, indépendant
+du flag acupuncture ; le moteur force G2 pour l'union des deux (l'ACU du lundi + garde du soir
+impose de toute façon G2 à l'acupunctrice). Migration one-shot : `force_g2` initialisé à `true`
+pour les médecins ayant déjà le flag acupuncture.
 
 ### C. Table de postes de journée (jours de semaine)
 Pré-posés avant la passe des postes : CA, G1/G2, RS, U (déclaré + auto), ACU, récup.
