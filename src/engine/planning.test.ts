@@ -337,8 +337,10 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     const blank = weekdays.filter((cd) => !res.grid.D01[cd.day]).length;
     expect(blank).toBeGreaterThanOrEqual(Math.floor(weekdays.length * 0.35));
     expect(blank).toBeLessThanOrEqual(Math.ceil(weekdays.length * 0.65));
-    // A full-timer can legitimately have a FEW blanks — Monday comp-off after a Sat/Fri garde
-    // (planning.ts:201-219) — but nowhere near the part-timer's ~half-blank TP pattern.
+    // A full-timer can legitimately have a FEW blanks — Monday comp-off after a Saturday garde
+    // (planning.ts:201-219; at this team size of 12, only Saturday gardes trigger it, Friday
+    // comp-off needs > 12) — but nowhere near the part-timer's ~half-blank TP pattern. The <=4
+    // ceiling covers a handful of Saturday comp-offs across the month (2 observed here).
     const blankD02 = weekdays.filter((cd) => !res.grid.D02[cd.day]).length;
     expect(blankD02).toBeLessThanOrEqual(4);
     expect(blankD02).toBeLessThan(blank / 2);
