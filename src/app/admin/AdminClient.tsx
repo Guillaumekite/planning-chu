@@ -9,12 +9,13 @@ import { weekdayOf, daysInMonth } from '@/engine/calendar';
 
 type Doctor = {
   id: number; name: string; universitaire: boolean; university_ratio: number;
-  part_time: boolean; part_time_ratio: number; acupuncture: boolean; douleur_poids: number; has_account: boolean;
+  part_time: boolean; part_time_ratio: number; acupuncture: boolean; douleur_poids: number;
+  force_g2: boolean; has_account: boolean;
 };
 type ApiDay = { day: number; weekday: number; isWeekend: boolean; isHoliday: boolean };
 type Equity = { count: Record<string, number>; weekendCount: Record<string, number>; heavyCount: Record<string, number>; spread: number };
 type GenResult =
-  | { status: 'feasible'; days: ApiDay[]; grid: Record<string, Record<number, string>>; gardeEquity: Equity }
+  | { status: 'feasible'; days: ApiDay[]; grid: Record<string, Record<number, string>>; gardeEquity: Equity; warnings?: string[] }
   | { status: 'infeasible'; day: number; reason: string; eligible: string[] }
   | { error: string };
 // A published planning as returned by GET /api/plannings (snake_case column names).
@@ -129,7 +130,7 @@ export default function AdminClient() {
       const uDays = Object.entries(perDay).filter(([, v]) => v).map(([d]) => Number(d));
       if (uDays.length) univConstraints[name] = uDays;
     }
-    type Profile = { universitaire?: boolean; universityRatio?: number; fte?: number; acupuncture?: boolean; douleurPoids?: number };
+    type Profile = { universitaire?: boolean; universityRatio?: number; fte?: number; acupuncture?: boolean; douleurPoids?: number; forceG2?: boolean };
     const profiles: Record<string, Profile> = {};
     for (const d of active) {
       const p: Profile = {};
@@ -137,6 +138,7 @@ export default function AdminClient() {
       if (d.part_time) p.fte = Math.max(0, Math.min(100, d.part_time_ratio || 100)) / 100;
       if (d.acupuncture) p.acupuncture = true;
       if (d.douleur_poids) p.douleurPoids = d.douleur_poids;
+      if (d.force_g2) p.forceG2 = true; // « Jamais G1 » (ex. Dzierzek)
       if (Object.keys(p).length) profiles[d.name] = p;
     }
     setLoading(true);
@@ -202,6 +204,7 @@ export default function AdminClient() {
                   <th className="pr-4">Univ.</th><th className="pr-4">% fac</th>
                   <th className="pr-4">Tps partiel</th><th className="pr-4">% prés.</th>
                   <th className="pr-4">Acu lun.</th>
+                  <th className="pr-4" title="Ce médecin ne prend jamais le rôle G1 (uniquement G2)">Jamais G1</th>
                   <th className="pr-4">Douleur</th>
                   <th className="pr-4">Compte</th><th></th>
                 </tr>
@@ -216,6 +219,7 @@ export default function AdminClient() {
                     <td className="pr-4"><input type="checkbox" checked={d.part_time} onChange={(e) => patchDoctor(d.id, { part_time: e.target.checked })} /></td>
                     <td className="pr-4">{d.part_time && <input type="number" min={0} max={100} className="w-14 rounded border border-gray-300 px-1 py-0.5" value={d.part_time_ratio} onChange={(e) => patchDoctor(d.id, { part_time_ratio: Number(e.target.value) })} />}</td>
                     <td className="pr-4"><input type="checkbox" checked={d.acupuncture} onChange={(e) => patchDoctor(d.id, { acupuncture: e.target.checked })} /></td>
+                    <td className="pr-4"><input type="checkbox" checked={d.force_g2} onChange={(e) => patchDoctor(d.id, { force_g2: e.target.checked })} title="Jamais G1 — uniquement G2" /></td>
                     <td className="pr-4">
                       <select className="rounded border border-gray-300 px-1 py-0.5" value={d.douleur_poids ?? 0} onChange={(e) => patchDoctor(d.id, { douleur_poids: Number(e.target.value) })}>
                         <option value={0}>Non</option>
@@ -292,6 +296,14 @@ export default function AdminClient() {
               {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
               <span className="text-sm text-gray-500">Brouillon généré, non encore publié.</span>
             </div>
+            {draft.warnings && draft.warnings.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">⚠️ À vérifier avant de publier ({draft.warnings.length})</p>
+                <ul className="mt-1 list-disc pl-5">
+                  {draft.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            )}
             <PlanningGrid days={draft.days} grid={draft.grid} doctors={active.map((d) => d.name)} />
             <EquityTable equity={draft.gardeEquity} doctors={active.map((d) => d.name)} />
           </div>

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { solveGardes } from './gardes';
-import { daysInMonth } from './calendar';
+import { daysInMonth, buildMonth } from './calendar';
 import { mulberry32, randInt } from './rng';
+import { DEFAULT_WEIGHTS } from './types';
 import type { GardeInput, GardeResult } from './types';
 
 function doctors(n: number): string[] {
@@ -69,6 +70,17 @@ describe('solveGardes — equity', () => {
     }
   });
 
+  it('counts Friday in the weekend equity bucket (Fri+Sat+Sun)', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(14) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const days = buildMonth(2026, 4, DEFAULT_WEIGHTS);
+    const friSatSun = days.filter((d) => d.weekday >= 4).length; // Fri(4), Sat(5), Sun(6)
+    const totalWeekendCount = Object.values(res.equity.weekendCount).reduce((s, v) => s + v, 0);
+    // 2 doctors (G1+G2) on garde every Fri/Sat/Sun day.
+    expect(totalWeekendCount).toBe(friSatSun * 2);
+  });
+
   it('rotates weekend/heavy gardes fairly across the roster', async () => {
     const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(14) });
     expect(res.status).toBe('feasible');
@@ -76,6 +88,16 @@ describe('solveGardes — equity', () => {
       const heavy = Object.values(res.equity.heavyCount);
       // No doctor hoards the painful days while another gets none.
       expect(Math.max(...heavy) - Math.min(...heavy)).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('rotates Fri/Sat/Sun gardes fairly across the roster', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(14) });
+    expect(res.status).toBe('feasible');
+    if (res.status === 'feasible') {
+      const we = Object.values(res.equity.weekendCount);
+      // No doctor hoards Fri/Sat/Sun gardes while another gets none.
+      expect(Math.max(...we) - Math.min(...we)).toBeLessThanOrEqual(3);
     }
   });
 
@@ -107,7 +129,66 @@ describe('solveGardes — equity', () => {
   });
 });
 
+describe('solveGardes — G+ wishes are hard & the monthly cap holds', () => {
+  it('forces the garde for each wisher when ≤ 2 G+ land on the same day', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [10], D06: [10] } });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const day10 = res.assignments.filter((a) => a.day === 10).map((a) => a.doctorId).sort();
+    expect(day10).toEqual(['D05', 'D06']);
+    expect(res.warnings).toHaveLength(0);
+  });
+
+  it('reserves both slots to wishers (with a warning) when ≥ 3 G+ hit the same day', async () => {
+    const res = await solveGardes({
+      year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [10], D06: [10], D07: [10] },
+    });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    for (const a of res.assignments.filter((x) => x.day === 10)) {
+      expect(['D05', 'D06', 'D07']).toContain(a.doctorId);
+    }
+    expect(res.warnings.some((w) => w.includes('3 G+ le 10'))).toBe(true);
+  });
+
+  it('keeps the first of two G+ closer than 3 days apart and warns about the second', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [10, 11] } });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(res.assignments.some((a) => a.day === 10 && a.doctorId === 'D05')).toBe(true);
+    expect(res.assignments.some((a) => a.day === 11 && a.doctorId === 'D05')).toBe(false); // rest rule
+    expect(res.warnings.some((w) => w.includes('repos'))).toBe(true);
+  });
+
+  it('caps every doctor at 7 gardes/month', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(9) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const perDoc: Record<string, number> = {};
+    for (const a of res.assignments) perDoc[a.doctorId] = (perDoc[a.doctorId] ?? 0) + 1;
+    for (const doc of doctors(9)) expect(perDoc[doc] ?? 0).toBeLessThanOrEqual(7);
+  });
+
+  it('lifts the cap for a doctor who posted more than 7 G+ (8 wishes → 8 gardes)', async () => {
+    const wishes = { D01: [1, 4, 7, 10, 13, 16, 19, 22] }; // 8 wishes, all ≥3 days apart
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(9), wishes });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(res.assignments.filter((a) => a.doctorId === 'D01').length).toBe(8);
+    for (const d of wishes.D01) {
+      expect(res.assignments.some((a) => a.day === d && a.doctorId === 'D01')).toBe(true);
+    }
+  });
+});
+
 describe('solveGardes — infeasibility is first-class', () => {
+  it('reports infeasible with a clear message when the 7-garde cap makes the month uncoverable', async () => {
+    // 8 doctors × 7 gardes = 56 < 60 slots (April) → provably infeasible under the cap.
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(8) });
+    expect(res.status).toBe('infeasible');
+    if (res.status === 'infeasible') expect(res.reason).toContain('7 gardes/médecin');
+  });
+
   it('detects a day with fewer than 2 eligible doctors', async () => {
     const docs = doctors(10);
     const gardeBlocked: Record<string, number[]> = {};

@@ -11,7 +11,7 @@ export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export interface CalendarDay {
   day: number;
   weekday: Weekday;
-  isWeekend: boolean; // Saturday or Sunday — used for the "≥1 WE garde / month" rule
+  isWeekend: boolean; // Saturday or Sunday — used by planning.ts/UI for the regular weekly grid
   isHoliday: boolean;
   /** Pénibilité weight for an on-call (garde) that day. */
   penibility: number;
@@ -29,7 +29,7 @@ export interface GardeWeights {
 }
 
 export const DEFAULT_WEIGHTS: GardeWeights = {
-  perWeekday: [1, 1, 1, 2, 2, 3, 3], // Mon-Wed=1, Thu/Fri=2, Sat/Sun=3
+  perWeekday: [1, 1, 1, 2, 3, 3, 3], // Mon-Wed=1, Thu=2, Fri/Sat/Sun=3
   holiday: 3,
   weekendDeficit: 4,
   wishHonored: 0.5,
@@ -47,7 +47,7 @@ export interface GardeInput {
   carryCount?: Record<DoctorId, number>;
   /** Per doctor: cumulative "heavy" (Thu→Sun) garde count from previous months. */
   carryHeavy?: Record<DoctorId, number>;
-  /** Per doctor: cumulative weekend (Sat/Sun) garde count from previous months (WE rotation). */
+  /** Per doctor: cumulative weekend (Fri/Sat/Sun) garde count from previous months (WE rotation). */
   carryWeekend?: Record<DoctorId, number>;
   /** Per doctor: days (1-based) the doctor explicitly WISHES a garde (garde svp). */
   wishes?: Record<DoctorId, number[]>;
@@ -74,7 +74,8 @@ export interface GardeAssignment {
 export interface EquityReport {
   /** Garde count per doctor THIS month. */
   count: Record<DoctorId, number>;
-  /** Weekend (Sat/Sun) gardes per doctor this month. */
+  /** Weekend (Fri/Sat/Sun) gardes per doctor this month — Friday counts toward equity even
+   * though `CalendarDay.isWeekend` (Sat/Sun only) does not. */
   weekendCount: Record<DoctorId, number>;
   /** "Heavy" (Thu→Sun) gardes per doctor this month. */
   heavyCount: Record<DoctorId, number>;
@@ -82,14 +83,20 @@ export interface EquityReport {
   cumulativeCount: Record<DoctorId, number>;
   /** Cumulative heavy count (carry + this month) — feeds next month's carryHeavy. */
   cumulativeHeavy: Record<DoctorId, number>;
-  /** Cumulative weekend count (carry + this month) — feeds next month's carryWeekend. */
+  /** Cumulative weekend (Fri/Sat/Sun) garde count (carry + this month) — feeds next month's carryWeekend. */
   cumulativeWeekend: Record<DoctorId, number>;
   /** Max - min cumulative garde count across doctors — headline fairness metric (lower = fairer). */
   spread: number;
 }
 
 export type GardeResult =
-  | { status: 'feasible'; assignments: GardeAssignment[]; equity: EquityReport }
+  | {
+      status: 'feasible';
+      assignments: GardeAssignment[];
+      equity: EquityReport;
+      /** Non-blocking issues the admin must see (G+ non honorables, jours surchargés…). */
+      warnings: string[];
+    }
   | {
       status: 'infeasible';
       day: number;
