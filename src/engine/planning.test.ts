@@ -303,6 +303,39 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     expect(checkedPedDays).toBeGreaterThan(0);
   });
 
+  it('a part-timer\'s RS shows and counts even on a TP off day — no vanished CS, no HC at ≤10 working', async () => {
+    // Regression (August bug): a part-timer's post-garde RS landed on a TP off day → blank cell →
+    // the day counted 8 working instead of 9 → only one CS slot (CS1 missing) AND the surplus
+    // doctor fell to HC. The RS must show, count as working, and NOT consume the TP quota.
+    const docs = doctors(10);
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D01: { fte: 0.5 } } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const notWorking = new Set(['CA', 'U', 'U+G1', 'U+G2']);
+    for (const cd of res.days) {
+      for (const doc of docs) {
+        // Mandatory rest: EVERY garde is followed by a displayed RS (only congé wins) — including
+        // the part-timer's gardes whose next day is one of their off days.
+        if (['G1', 'G2'].includes(res.grid[doc][cd.day] ?? '') && cd.day < res.days.length) {
+          expect(['RS', 'CA']).toContain(res.grid[doc][cd.day + 1] ?? '');
+        }
+      }
+      if (cd.isWeekend || cd.isHoliday || cd.day === 1) continue; // day 1 has no RS → known surplus
+      const worked = docs.filter((d) => {
+        const c = res.grid[d][cd.day];
+        return !!c && !notWorking.has(c);
+      }).length;
+      // At ≤10 working, the required posts consume everyone: never an HC.
+      expect(docs.filter((d) => res.grid[d][cd.day] === 'HC').length).toBe(0);
+      // And the CS slots match the working count (the August symptom was a missing CS1).
+      const cs1 = docs.filter((d) => res.grid[d][cd.day] === 'CS1').length;
+      const cs2 = docs.filter((d) => res.grid[d][cd.day] === 'CS2').length;
+      if (worked >= 9) { expect(cs1).toBe(1); expect(cs2).toBe(1); }
+      else if (worked === 8) expect(cs1 + cs2).toBe(1);
+    }
+    // Self-check clean — except day 1 (no RS from a previous day → known surplus, warned on purpose).
+    expect(res.warnings.filter((w) => w.startsWith('Contrôle') && !w.startsWith('Contrôle du 1 '))).toHaveLength(0);
+  });
+
   it('CS equity: combined CS1+CS2 per doctor stays tight, capped at 6, alternated, never two days in a row', async () => {
     const docs = doctors(12);
     const res = await solvePlanning({ year: 2026, month: 4, doctors: docs });
