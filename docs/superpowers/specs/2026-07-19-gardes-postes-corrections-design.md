@@ -103,3 +103,17 @@ Pré-posés avant la passe des postes : CA, G1/G2, RS, U (déclaré + auto), ACU
 ## Hors périmètre (inchangé)
 `CalendarDay.isWeekend` partagé, règle U (déclaré/auto, juillet-août), BM-BS ↔ U+G1,
 alternance G1/G2 (|G1−G2| ≤ 1) et forceG2, TP 3/2, déterminisme du moteur.
+
+## Amendement 2026-07-22 : Ped dans le cœur + moteur d'équité CS dédié
+- **Ped remplace un BM** les lun/mer/jeu/ven (exactement 1 Ped ces jours, 0 le mardi) : à 9
+  travaillants un jour Ped = 1 BM + 1 Ped ; le 3ᵉ bloc (≥ 10) reste un BM (→ 2 BM + 1 Ped).
+  L'« extra Ped » disparaît de l'échelle.
+- **CS1/CS2 — moteur dédié** (l'ancien équilibrage traitait CS1 et CS2 comme deux postes
+  indépendants → un médecin pouvait finir à 4+4=8 CS pendant qu'un autre restait à 2) :
+  compteur combiné par médecin, cible au prorata des jours de présence, **cap dur 6 CS/mois**
+  (CS non couvert + warning si tout le monde est au cap), étiquettes CS1/CS2 alternées par
+  médecin (départage de complémentarité au 2ᵉ choix ; écart résiduel ≤ 2 accepté en fin de
+  mois), **jamais 2 CS deux jours calendaires d'affilée** (repli autorisé si aucun autre
+  choix), lendemain-de-RS préféré à égalité parfaite d'équité, rotation neutre en dernier.
+- **Ordre de remplissage** remanié pour donner du choix au moteur CS : extras → [BM-BS], S
+  (contrainte « Pas de S ») → CS (pool encore large) → BM/Ped → HC.

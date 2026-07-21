@@ -264,32 +264,67 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     expect(cdTotal).toBe(0);
   });
 
-  it('staffing table: 2 BM + S + CS1 + CS2 at 9 working; a 3rd BM at ≥10; P no longer exists', async () => {
+  it('staffing table: Ped replaces one BM on Mon/Wed/Thu/Fri, never on Tuesday; 3rd BM at ≥10; no P without the flag', async () => {
     const big = await solvePlanning({ year: 2026, month: 4, doctors: doctors(12) });
     const nine = await solvePlanning({ year: 2026, month: 4, doctors: doctors(9) });
     if (big.status !== 'feasible' || nine.status !== 'feasible') throw new Error('expected feasible');
-    // The P post was replaced by the 3rd BM rule — it must never appear.
+    // No P post without any présence-flagged doctor.
     for (const res of [big, nine]) {
       for (const cd of res.days) for (const doc of Object.keys(res.grid)) expect(res.grid[doc][cd.day]).not.toBe('P');
     }
-    const bmCount = (res: typeof big, day: number, docs: string[]) =>
-      docs.filter((d) => res.grid[d][day] === 'BM').length;
+    const count = (res: typeof big, day: number, docs: string[], post: string) =>
+      docs.filter((d) => res.grid[d][day] === post).length;
     for (const cd of nine.days) {
       if (cd.isWeekend || cd.isHoliday) continue;
-      // 9 working: mandatory core = 2 BM, 1 S, CS1, CS2 — exactly, no spare for a 3rd BM.
-      expect(bmCount(nine, cd.day, doctors(9))).toBe(2);
-      expect(doctors(9).filter((d) => nine.grid[d][cd.day] === 'S').length).toBe(1);
-      expect(doctors(9).filter((d) => nine.grid[d][cd.day] === 'CS1').length).toBe(1);
-      expect(doctors(9).filter((d) => nine.grid[d][cd.day] === 'CS2').length).toBe(1);
+      const isPedDay = [0, 2, 3, 4].includes(cd.weekday);
+      // 9 working: 2 "blocs" of which one is Ped on Ped days (1 BM + 1 Ped), else 2 BM —
+      // plus 1 S, CS1, CS2. Exactly, no spare for a 3rd bloc.
+      expect(count(nine, cd.day, doctors(9), 'BM')).toBe(isPedDay ? 1 : 2);
+      expect(count(nine, cd.day, doctors(9), 'Ped')).toBe(isPedDay ? 1 : 0);
+      expect(count(nine, cd.day, doctors(9), 'S')).toBe(1);
+      expect(count(nine, cd.day, doctors(9), 'CS1')).toBe(1);
+      expect(count(nine, cd.day, doctors(9), 'CS2')).toBe(1);
     }
-    // 12 on the roster: Tuesdays (no Ped, no CD, no comp-off effect on the count) get the 3rd BM.
-    let checkedTuesdays = 0;
+    // 12 on the roster: 3 blocs — Tuesdays 3 BM + 0 Ped; Ped days 2 BM + exactly 1 Ped.
+    let checkedTuesdays = 0, checkedPedDays = 0;
     for (const cd of big.days) {
-      if (cd.weekday !== 1 || cd.isHoliday) continue;
-      expect(bmCount(big, cd.day, doctors(12))).toBe(3);
-      checkedTuesdays++;
+      if (cd.isWeekend || cd.isHoliday) continue;
+      if (cd.weekday === 1) {
+        expect(count(big, cd.day, doctors(12), 'BM')).toBe(3);
+        expect(count(big, cd.day, doctors(12), 'Ped')).toBe(0);
+        checkedTuesdays++;
+      } else {
+        expect(count(big, cd.day, doctors(12), 'BM')).toBe(2);
+        expect(count(big, cd.day, doctors(12), 'Ped')).toBe(1);
+        checkedPedDays++;
+      }
     }
     expect(checkedTuesdays).toBeGreaterThan(0);
+    expect(checkedPedDays).toBeGreaterThan(0);
+  });
+
+  it('CS equity: combined CS1+CS2 per doctor stays tight, capped at 6, alternated, never two days in a row', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const isCs = (v: string | undefined) => v === 'CS1' || v === 'CS2';
+    for (const doc of docs) {
+      const cs1 = res.days.filter((cd) => res.grid[doc][cd.day] === 'CS1').length;
+      const cs2 = res.days.filter((cd) => res.grid[doc][cd.day] === 'CS2').length;
+      expect(cs1 + cs2).toBeLessThanOrEqual(6); // hard monthly cap
+      // Per-doctor alternation: never "only CS1" or "only CS2" — a residual gap of 2 can remain
+      // when two same-preference doctors collide near month end, that's acceptable.
+      expect(Math.abs(cs1 - cs2)).toBeLessThanOrEqual(2);
+      // Never CS on two calendar days in a row (enough staff at 12 → no fallback needed).
+      for (const cd of res.days) {
+        if (isCs(res.grid[doc][cd.day]) && isCs(res.grid[doc][cd.day + 1])) {
+          throw new Error(`${doc} has CS on days ${cd.day} and ${cd.day + 1}`);
+        }
+      }
+    }
+    // Combined totals stay tight across always-present doctors (44 slots / 12 docs ≈ 3.7).
+    const totals = docs.map((doc) => res.days.filter((cd) => isCs(res.grid[doc][cd.day])).length);
+    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(2);
   });
 
   it('at 8 working, a single CS runs each day, alternating so CS1/CS2 stay even per week', async () => {

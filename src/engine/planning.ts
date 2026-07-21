@@ -368,12 +368,15 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
   // Pass 3 — day posts (weekdays only). MANDATORY core per the staffing table, then extras
   // following the working-count ladder, strictly limited to the spare capacity beyond the core:
-  //   Core (priority order): [BM-BS if a U+G1 that day], BM, BM, S, then CS1+CS2 (≥ 9 working)
-  //   or a single alternating CS (8 working — weekly + monthly CS1/CS2 balance kept even).
-  //   Extras ladder: Ped (Mon/Wed/Thu/Fri) · 3rd BM (≥ 10) · CD (≥ 11, douleur-weighted) ·
-  //   P (≥ 12, présence-flagged doctors only) · MM/MS (≥ 12 AND the acupuncture doctor on garde;
-  //   MS when her garde follows a daytime ACU). Whoever is left → HC (the admin adjusts manually
-  //   beyond 14: HC or off for doctors already above 48h/week).
+  //   Core (priority order): [BM-BS if a U+G1 that day], BM, then Ped on Mon/Wed/Thu/Fri (the Ped
+  //   IS one of the day's 2-3 "bloc" bodies, it replaces the 2nd BM — exactly one Ped those days,
+  //   none on Tuesday) or a 2nd BM, then S, then the CS slots (2 at ≥ 9 working, 1 at 8).
+  //   Extras ladder: 3rd BM (≥ 10) · CD (≥ 11, douleur-weighted) · P (≥ 12, présence-flagged
+  //   doctors only) · MM/MS (≥ 12 AND the acupuncture doctor on garde; MS when her garde follows
+  //   a daytime ACU). Whoever is left → HC (the admin adjusts manually beyond 14).
+  //   CS1/CS2 get a DEDICATED equity engine (see the CS block below): combined per-doctor count
+  //   prorated on presence days, hard cap 6 CS/doctor/month, per-doctor CS1/CS2 alternation, no
+  //   CS two calendar days in a row, day-after-RS preferred on exact equity ties.
   const postCount: Record<DoctorId, Record<string, number>> = {};
   const totalPosts: Record<DoctorId, number> = {};
   for (const doc of doctors) { postCount[doc] = {}; totalPosts[doc] = 0; }
@@ -382,6 +385,22 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // Deterministic rotation for tie-breaks: the alphabetical order shifted by the day number, so
   // early-sorted names no longer systematically win every tie.
   const alphaIdx = new Map([...doctors].sort((a, b) => a.localeCompare(b)).map((d, i) => [d, i]));
+
+  // CS equity state. The old scheme balanced CS1 and CS2 as two independent posts, so a doctor
+  // could end up "balanced" at 4 CS1 + 4 CS2 = 8 while a colleague (often taken by gardes/RS/U
+  // when CS was handed out) sat at 2. The combined counter + presence prorata fixes that.
+  const MAX_CS_PER_MONTH = 6;
+  const csTotal: Record<DoctorId, number> = {};
+  const cs1Cnt: Record<DoctorId, number> = {};
+  const cs2Cnt: Record<DoctorId, number> = {};
+  const lastCsDay: Record<DoctorId, number> = {};
+  const presWeekdays: Record<DoctorId, number> = {};
+  for (const doc of doctors) {
+    csTotal[doc] = 0; cs1Cnt[doc] = 0; cs2Cnt[doc] = 0; lastCsDay[doc] = -9;
+    presWeekdays[doc] = days.filter(
+      (cd) => !cd.isWeekend && !cd.isHoliday && isWorking(doc, cd.day) && !compOff.has(`${doc}|${cd.day}`),
+    ).length;
+  }
 
   for (const cd of days) {
     // Weekend / holiday: only gardes + RS exist. Everyone else present is off (blank).
@@ -411,25 +430,27 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
         return rot(a) - rot(b);
       })[0];
 
-    // Which CS runs today: both at ≥ 9 working; at ≤ 8 only the LAGGING one (weekly balance
-    // first, monthly tie-break) so CS1/CS2 stay even over each week and over the month.
+    // How many CS slots today (2 at ≥ 9 working, 1 at 8), and which label lags for the
+    // single-slot case (weekly balance first, monthly tie-break).
     const weekId = cd.day - cd.weekday; // day-number of that week's Monday (unique per week)
     const wk = csWeek.get(weekId) ?? { CS1: 0, CS2: 0 };
     csWeek.set(weekId, wk);
     const lag: 'CS1' | 'CS2' =
       wk.CS1 !== wk.CS2 ? (wk.CS1 < wk.CS2 ? 'CS1' : 'CS2') : csMonth.CS1 <= csMonth.CS2 ? 'CS1' : 'CS2';
-    const core: string[] = [];
-    if (bmbsDays.has(cd.day)) core.push('BM-BS'); // bloc 7h30-18h quand un universitaire est U+G1
-    core.push('BM', 'BM', 'S');
-    if (working >= 9) core.push(lag, lag === 'CS1' ? 'CS2' : 'CS1');
-    else core.push(lag);
+    const csSlots = working >= 9 ? 2 : 1;
+    // Core in two waves around the CS engine: S first (it carries the « Pas de S » eligibility
+    // constraint), then CS picked from a still-wide pool (so its equity/cap logic has real
+    // choice — filling CS last used to leave it the 2 leftover doctors, with zero freedom),
+    // then the fully-generic blocs (BM / Ped) last.
+    const coreFirst: string[] = [];
+    if (bmbsDays.has(cd.day)) coreFirst.push('BM-BS'); // bloc 7h30-18h quand un universitaire est U+G1
+    coreFirst.push('S');
+    // Ped IS one of the day's blocs on Mon/Wed/Thu/Fri: it replaces the 2nd BM (exactly one Ped
+    // those days, none on Tuesday). The ≥10 extra below still adds a plain BM.
+    const coreRest: string[] = ['BM', PED_DAYS.has(cd.weekday) ? 'Ped' : 'BM'];
 
-    // Extras ladder — only with spare capacity beyond the core, gated by the working count.
-    let budget = pool.length - core.length;
-    if (budget > 0 && PED_DAYS.has(cd.weekday)) {
-      const doc = leastFor('Ped'); // pédiatrie lun/mer/jeu/ven
-      if (doc) { assign(doc, 'Ped'); budget -= 1; }
-    }
+    // Extras ladder — only with spare capacity beyond the core AND the CS slots.
+    let budget = pool.length - coreFirst.length - coreRest.length - csSlots;
     if (budget > 0 && working >= 10) {
       const doc = leastFor('BM'); // 3e bloc quand ≥ 10 travaillants
       if (doc) { assign(doc, 'BM'); budget -= 1; }
@@ -463,10 +484,9 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       if (doc) { assign(doc, post); budget -= 1; }
     }
 
-    // Core fill — by construction the pool still covers it (extras only consumed the surplus).
-    // "Pas de S": the S post never goes to a flagged doctor; if nobody else remains, S stays
-    // uncovered with a warning (the flagged doctors fall through to the other posts / HC).
-    for (const post of core) {
+    // Core wave 1 — [BM-BS], S. "Pas de S": the S post never goes to a flagged doctor; if nobody
+    // else remains, S stays uncovered with a warning (flagged doctors fall through to other posts).
+    for (const post of coreFirst) {
       if (pool.length === 0) break;
       const doc = post === 'S' ? leastFor('S', pool.filter((d) => !noS.has(d))) : leastFor(post);
       if (!doc) {
@@ -474,9 +494,79 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
         continue;
       }
       assign(doc, post);
-      if (post === 'CS1' || post === 'CS2') { wk[post] += 1; csMonth[post] += 1; }
     }
-    // Leftover → HC.
+
+    // CS fill — dedicated equity: pick doctors by combined CS count prorated on their presence
+    // days (hard cap 6/month), never two calendar days in a row (unless nobody else can),
+    // day-after-RS preferred on exact ties, neutral rotation last. Labels: the single-slot day
+    // takes the week-lagging label; with two slots each doctor gets the label they personally
+    // lag on (per-doctor CS1/CS2 alternation), conflicts resolved by the bigger gap.
+    const csLabelPref = (d: DoctorId): 'CS1' | 'CS2' =>
+      cs1Cnt[d] < cs2Cnt[d] ? 'CS1' : cs2Cnt[d] < cs1Cnt[d] ? 'CS2' : lag;
+    const csPick = (wantLabel?: 'CS1' | 'CS2'): DoctorId | undefined => {
+      const underCap = pool.filter((d) => csTotal[d] < MAX_CS_PER_MONTH);
+      if (!underCap.length) {
+        if (pool.length) warnings.push(`CS non couvert le ${cd.day} : tous les médecins disponibles ont déjà ${MAX_CS_PER_MONTH} CS ce mois-ci.`);
+        return undefined;
+      }
+      const noStreak = underCap.filter((d) => lastCsDay[d] !== cd.day - 1);
+      return [...(noStreak.length ? noStreak : underCap)].sort((a, b) => {
+        const ra = csTotal[a] / Math.max(presWeekdays[a], 1);
+        const rb = csTotal[b] / Math.max(presWeekdays[b], 1);
+        if (ra !== rb) return ra - rb; // équité quantité/prorata d'abord
+        const rsA = grid[a][cd.day - 1] === 'RS' ? 0 : 1; // puis lendemain de RS
+        const rsB = grid[b][cd.day - 1] === 'RS' ? 0 : 1;
+        if (rsA !== rsB) return rsA - rsB;
+        if (wantLabel) {
+          // 2nd slot: prefer a doctor whose own lagging label COMPLEMENTS the 1st pick's,
+          // so both get the label they personally need (fewer alternation conflicts).
+          const wa = csLabelPref(a) === wantLabel ? 0 : 1;
+          const wb = csLabelPref(b) === wantLabel ? 0 : 1;
+          if (wa !== wb) return wa - wb;
+        }
+        if (totalPosts[a] !== totalPosts[b]) return totalPosts[a] - totalPosts[b];
+        return rot(a) - rot(b);
+      })[0];
+    };
+    const picked: DoctorId[] = [];
+    for (let s = 0; s < csSlots && pool.length; s++) {
+      const want = picked.length === 1 ? (csLabelPref(picked[0]) === 'CS1' ? 'CS2' : 'CS1') : undefined;
+      const doc = csPick(want);
+      if (!doc) break;
+      picked.push(doc);
+      pool = pool.filter((d) => d !== doc); // reserved; labelled and written just below
+    }
+    const labels: ('CS1' | 'CS2')[] = [];
+    if (picked.length === 1) labels.push(lag);
+    else if (picked.length === 2) {
+      const p0 = csLabelPref(picked[0]);
+      const p1 = csLabelPref(picked[1]);
+      if (p0 !== p1) labels.push(p0, p1);
+      else {
+        const gap = (d: DoctorId) => Math.abs(cs1Cnt[d] - cs2Cnt[d]);
+        const other: 'CS1' | 'CS2' = p0 === 'CS1' ? 'CS2' : 'CS1';
+        if (gap(picked[0]) >= gap(picked[1])) labels.push(p0, other);
+        else labels.push(other, p0);
+      }
+    }
+    picked.forEach((doc, i) => {
+      const label = labels[i];
+      grid[doc][cd.day] = label;
+      postCount[doc][label] = (postCount[doc][label] ?? 0) + 1;
+      totalPosts[doc] += 1;
+      csTotal[doc] += 1;
+      (label === 'CS1' ? cs1Cnt : cs2Cnt)[doc] += 1;
+      lastCsDay[doc] = cd.day;
+      wk[label] += 1;
+      csMonth[label] += 1;
+    });
+
+    // Core wave 2 — the generic blocs (BM / Ped), then leftover → HC.
+    for (const post of coreRest) {
+      if (pool.length === 0) break;
+      const doc = leastFor(post);
+      if (doc) assign(doc, post);
+    }
     for (const doc of [...pool]) assign(doc, 'HC');
   }
 
