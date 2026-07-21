@@ -25,6 +25,13 @@ ALTER TABLE doctors ADD COLUMN IF NOT EXISTS douleur_poids integer NOT NULL DEFA
 -- "Jamais G1" : ce médecin ne prend JAMAIS le rôle G1 (ex. Dzierzek, mal de dos) — indépendant
 -- de l'acupuncture, même si en pratique c'est la même personne aujourd'hui.
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS force_g2 boolean NOT NULL DEFAULT false;
+-- Acupuncture éclatée en deux cases lisibles (lundi / mercredi) — remplace la case unique.
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS acu_lundi boolean NOT NULL DEFAULT false;
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS acu_mercredi boolean NOT NULL DEFAULT false;
+-- "Pas de S" : jamais affecté au poste S.
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS no_s boolean NOT NULL DEFAULT false;
+-- "P" : éligible au poste Présence (posé seulement quand ≥ 12 travaillants).
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS presence boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS users (
   id                   serial PRIMARY KEY,
@@ -120,6 +127,18 @@ async function runConfigMigrations(): Promise<void> {
     await query(`UPDATE doctors SET force_g2 = true WHERE acupuncture = true`);
     await query(
       `INSERT INTO app_config (key, value) VALUES ('force_g2_seed_v1', 'done') ON CONFLICT (key) DO NOTHING`,
+    );
+  }
+
+  // v3: split the single acupuncture flag into "Acu lundi" + "Acu mercredi" (same behavior as
+  // before for the doctors who had it). Runs once; the admin can then toggle each day freely.
+  const acuSplit = await queryOne<{ value: string }>(
+    `SELECT value FROM app_config WHERE key = 'acu_split_seed_v1'`,
+  );
+  if (!acuSplit) {
+    await query(`UPDATE doctors SET acu_lundi = true, acu_mercredi = true WHERE acupuncture = true`);
+    await query(
+      `INSERT INTO app_config (key, value) VALUES ('acu_split_seed_v1', 'done') ON CONFLICT (key) DO NOTHING`,
     );
   }
 }

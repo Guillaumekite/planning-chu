@@ -27,12 +27,19 @@ const FR_WEEKDAY = ['lun', 'mar', 'mer', 'jeu', 'ven', 'sam', 'dim'];
  * wished (G+) more than 7 days, in which case their cap is their wish count. */
 const MAX_GARDES_PER_MONTH = 7;
 
+/** Weekend (Fri/Sat/Sun) gardes per doctor per month: at most 2 — raised only when the roster
+ * cannot cover all weekend slots at 2 each (adaptive, with an admin warning). G+ wishes do NOT
+ * override this cap. */
+const MAX_WEEKEND_GARDES = 2;
+
 /** Wish-forcing decisions derived from G+ days, handed to the MILP and the local search. */
 type WishPlan = {
   /** `${day}|${doc}` — garde REQUIRED (wisher with ≤2 wishers that day, or drawn by lot at ≥3). */
   forced: Set<string>;
   /** Per-doctor monthly cap (7, or the wish count when > 7). */
   cap: Record<DoctorId, number>;
+  /** Weekend-garde cap for THIS solve (2, or the adaptive minimum when the roster is short). */
+  weCap: number;
 };
 
 type GLPK = Awaited<ReturnType<typeof GLPKFactory>>;
@@ -59,14 +66,31 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   const isBlocked = (d: number, doc: DoctorId) => (blocked[doc] ?? []).includes(d);
   const wants = (d: number, doc: DoctorId) => (wishes[doc] ?? []).includes(d);
 
+  // ---- Weekend cap (Fri/Sat/Sun): 2 per doctor, raised only if the roster can't cover ----
+  const warnings: string[] = [];
+  const byDay = new Map(days.map((cd) => [cd.day, cd]));
+  const weekendDays = days.filter((cd) => isGardeWeekend(cd));
+  const weSlots = 2 * weekendDays.length;
+  const weCapacityAt = (c: number) =>
+    doctors.reduce((s, doc) => s + Math.min(c, weekendDays.filter((cd) => !isBlocked(cd.day, doc)).length), 0);
+  let weCap = MAX_WEEKEND_GARDES;
+  while (weCap < 31 && weCapacityAt(weCap) < weSlots) weCap++;
+  if (weCap > MAX_WEEKEND_GARDES) {
+    warnings.push(
+      `Effectif insuffisant pour limiter chacun à ${MAX_WEEKEND_GARDES} gardes de week-end (ven/sam/dim) : ` +
+        `${weSlots} places de week-end à couvrir — cap porté à ${weCap} ce mois-ci.`,
+    );
+  }
+
   // ---- G+ (souhait_garde) preprocessing: wishes become HARD where consistent ----
   // Per doctor: dedupe, drop wishes on blocked days, drop a wish closer than 3 days to the
-  // previous kept one (the rest rule makes both impossible). Every drop produces a warning.
-  const warnings: string[] = [];
+  // previous kept one (the rest rule makes both impossible), and refuse weekend wishes beyond
+  // the weekend cap (G+ never overrides it). Every drop produces a warning.
   const keptWishes: Record<DoctorId, number[]> = {};
   for (const doc of doctors) {
     const asked = [...new Set(wishes[doc] ?? [])].filter((d) => d >= 1 && d <= days.length).sort((a, b) => a - b);
     const kept: number[] = [];
+    let weKept = 0;
     for (const d of asked) {
       if (isBlocked(d, doc)) {
         warnings.push(`G+ de ${doc} le ${d} ignoré : jour indisponible pour une garde (congé, G−, temps partiel…).`);
@@ -76,6 +100,12 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
         warnings.push(`G+ de ${doc} le ${d} non garanti : à moins de 3 jours de son G+ du ${kept[kept.length - 1]} (règle de repos).`);
         continue;
       }
+      const isWe = isGardeWeekend(byDay.get(d)!);
+      if (isWe && weKept >= weCap) {
+        warnings.push(`G+ de ${doc} le ${d} refusé : dépasserait la limite de ${weCap} gardes de week-end (ven/sam/dim) par mois.`);
+        continue;
+      }
+      if (isWe) weKept += 1;
       kept.push(d);
     }
     if (kept.length) keptWishes[doc] = kept;
@@ -139,17 +169,23 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
     };
   }
 
-  // ---- Step 1: feasibility MILP (fast), G+ forcés ; retry sans forçage si infaisable ----
-  let plan: WishPlan = { forced, cap };
-  let feasible = await solveFeasibility(input, days, weights, plan);
-  if (!feasible && forced.size > 0) {
-    plan = { forced: new Set(), cap };
+  // ---- Step 1: feasibility MILP (fast). Relaxation ladder if over-constrained: first raise the
+  // weekend cap a notch, then drop the G+ forcing, then both — each step adds an admin warning.
+  const attempts: { forced: Set<string>; weCap: number; note?: string }[] = [
+    { forced, weCap },
+    { forced, weCap: weCap + 1, note: `Cap week-end porté à ${weCap + 1} (impossible à ${weCap} avec les contraintes du mois).` },
+    { forced: new Set<string>(), weCap, note: `Impossible d'honorer tous les G+ en même temps (repos / effectif / cap week-end) — planning généré sans les garantir.` },
+    { forced: new Set<string>(), weCap: weCap + 2, note: `Ni les G+ ni le cap week-end de ${weCap} n'étaient tenables ensemble — G+ non garantis et cap week-end porté à ${weCap + 2}.` },
+    { forced: new Set<string>(), weCap: 31, note: `Cap de gardes de week-end abandonné ce mois-ci (mois trop contraint) — vérifie les indisponibilités.` },
+  ];
+  let plan: WishPlan = { forced, cap, weCap };
+  let feasible: Record<string, boolean> | null = null;
+  for (const attempt of attempts) {
+    plan = { forced: attempt.forced, cap, weCap: attempt.weCap };
     feasible = await solveFeasibility(input, days, weights, plan);
     if (feasible) {
-      warnings.push(
-        `Impossible d'honorer tous les G+ en même temps (règle de repos / effectif) — planning généré sans les garantir. ` +
-          `Revois les G+ en conflit ou les indisponibilités.`,
-      );
+      if (attempt.note) warnings.push(attempt.note);
+      break;
     }
   }
   if (!feasible) {
@@ -174,10 +210,11 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
 
   // ---- Step 2: deterministic local-search equity polishing ----
   // `assigned[dayIndex]` = the 2 doctor ids on garde that day (from the feasible solution).
+  const forceG2 = new Set(input.forceG2 ?? []);
   const assigned: DoctorId[][] = days.map((cd) =>
     doctors.filter((doc) => !isBlocked(cd.day, doc) && feasible[gv(cd.day, doc)]),
   );
-  polishEquity(days, doctors, assigned, blocked, carryCount, carryHeavy, carryWeekend, input.fte ?? {}, plan);
+  polishEquity(days, doctors, assigned, blocked, carryCount, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2);
 
   // ---- Build result ----
   const count: Record<DoctorId, number> = {};
@@ -190,7 +227,6 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   }
   // Role (G1/G2) assignment — INTRA-MONTH balancing so each doctor alternates roles across their
   // gardes (|G1 − G2| ≤ 1), instead of the old alphabetical tie-break that froze a doctor into one role.
-  const forceG2 = new Set(input.forceG2 ?? []);
   const g1PerDay = assignRoles(assigned, forceG2);
 
   const assignments: GardeAssignment[] = [];
@@ -332,29 +368,60 @@ function assignRoles(pairs: DoctorId[][], forceG2: Set<DoctorId>): DoctorId[] {
   const vertsSorted = Object.keys(bal).sort((a, b) => a.localeCompare(b));
 
   for (let guard = 0; guard < pairs.length * 2 + 50; guard++) {
+    // Overloaded on G1 (bal ≥ 2) — push excess G1 along a forward path to a lighter doctor.
     let s = '';
     for (const v of vertsSorted) if (bal[v] >= 2 && (s === '' || bal[v] > bal[s])) s = v;
-    if (s === '') break;
-    // Directed adjacency over swappable edges (G1 → G2), sorted for determinism.
-    const adj: Record<string, { di: number; to: string }[]> = {};
+    if (s !== '') {
+      // Directed adjacency over swappable edges (G1 → G2), sorted for determinism.
+      const adj: Record<string, { di: number; to: string }[]> = {};
+      for (let di = 0; di < pairs.length; di++) {
+        if (!swappable(di)) continue;
+        (adj[g1arr[di]] ??= []).push({ di, to: other(di) });
+      }
+      for (const u in adj) adj[u].sort((p, q) => (p.to === q.to ? p.di - q.di : p.to.localeCompare(q.to)));
+      // BFS for a path from s to any lighter doctor (bal ≤ bal[s] − 2).
+      const parent: Record<string, { di: number; from: string } | null> = { [s]: null };
+      const queue = [s];
+      let target = '';
+      while (queue.length) {
+        const u = queue.shift()!;
+        if (u !== s && bal[u] < bal[s] - 2) { target = u; break; } // strict ⇒ Σbal² strictly drops
+        for (const { di, to } of adj[u] ?? []) if (!(to in parent)) { parent[to] = { di, from: u }; queue.push(to); }
+      }
+      if (target !== '') {
+        for (let cur = target; parent[cur]; ) {
+          const { di, from } = parent[cur]!;
+          g1arr[di] = cur; bal[from] -= 2; bal[cur] += 2; // flip edge from(G1)→cur(G2)
+          cur = from;
+        }
+        continue;
+      }
+    }
+
+    // Overloaded on G2 (bal ≤ −2) — the SYMMETRIC case the forward pass can miss (e.g. one doctor
+    // at −2 while everybody else sits at +1/0): pull a G1 from a heavier doctor along a REVERSED
+    // path ending at s2. Same strict Σbal² decrease ⇒ terminates.
+    let s2 = '';
+    for (const v of vertsSorted) if (bal[v] <= -2 && (s2 === '' || bal[v] < bal[s2])) s2 = v;
+    if (s2 === '') break;
+    const adjR: Record<string, { di: number; to: string }[]> = {};
     for (let di = 0; di < pairs.length; di++) {
       if (!swappable(di)) continue;
-      (adj[g1arr[di]] ??= []).push({ di, to: other(di) });
+      (adjR[other(di)] ??= []).push({ di, to: g1arr[di] }); // head (G2) → tail (G1)
     }
-    for (const u in adj) adj[u].sort((p, q) => (p.to === q.to ? p.di - q.di : p.to.localeCompare(q.to)));
-    // BFS for a path from s to any lighter doctor (bal ≤ bal[s] − 2).
-    const parent: Record<string, { di: number; from: string } | null> = { [s]: null };
-    const queue = [s];
-    let target = '';
-    while (queue.length) {
-      const u = queue.shift()!;
-      if (u !== s && bal[u] < bal[s] - 2) { target = u; break; } // strict ⇒ Σbal² strictly drops
-      for (const { di, to } of adj[u] ?? []) if (!(to in parent)) { parent[to] = { di, from: u }; queue.push(to); }
+    for (const u in adjR) adjR[u].sort((p, q) => (p.to === q.to ? p.di - q.di : p.to.localeCompare(q.to)));
+    const parentR: Record<string, { di: number; from: string } | null> = { [s2]: null };
+    const queueR = [s2];
+    let src = '';
+    while (queueR.length) {
+      const u = queueR.shift()!;
+      if (u !== s2 && bal[u] > bal[s2] + 2) { src = u; break; } // strict ⇒ Σbal² strictly drops
+      for (const { di, to } of adjR[u] ?? []) if (!(to in parentR)) { parentR[to] = { di, from: u }; queueR.push(to); }
     }
-    if (target === '') break; // s cannot be improved further
-    for (let cur = target; parent[cur]; ) {
-      const { di, from } = parent[cur]!;
-      g1arr[di] = cur; bal[from] -= 2; bal[cur] += 2; // flip edge from(G1)→cur(G2)
+    if (src === '') break; // s2 cannot be improved either — give up
+    for (let cur = src; parentR[cur]; ) {
+      const { di, from } = parentR[cur]!;
+      g1arr[di] = from; bal[cur] -= 2; bal[from] += 2; // flip edge cur(G1)→from(G2)
       cur = from;
     }
   }
@@ -377,6 +444,7 @@ async function solveFeasibility(
   type Term = { name: string; coef: number };
   const dayVars: Record<number, Term[]> = {};
   const docVars: Record<DoctorId, Term[]> = {};
+  const docWeVars: Record<DoctorId, Term[]> = {};
   const wedefVars: Record<DoctorId, Term[]> = {};
   const rsRows: { name: string; vars: Term[] }[] = [];
   const binaries: string[] = [];
@@ -385,6 +453,7 @@ async function solveFeasibility(
   for (const cd of days) dayVars[cd.day] = [];
   for (const doc of doctors) {
     docVars[doc] = [];
+    docWeVars[doc] = [];
     wedefVars[doc] = [{ name: `deficit_${doc}`, coef: 1 }];
     objVars.push({ name: `deficit_${doc}`, coef: weights.weekendDeficit });
   }
@@ -395,7 +464,10 @@ async function solveFeasibility(
       binaries.push(name);
       dayVars[cd.day].push({ name, coef: 1 });
       docVars[doc].push({ name, coef: 1 });
-      if (isGardeWeekend(cd)) wedefVars[doc].push({ name, coef: 1 });
+      if (isGardeWeekend(cd)) {
+        wedefVars[doc].push({ name, coef: 1 });
+        docWeVars[doc].push({ name, coef: 1 });
+      }
     }
   }
   // Rest rule: garde → RS → worked day (not garde). So in ANY 3 consecutive calendar days a
@@ -417,6 +489,10 @@ async function solveFeasibility(
   for (const doc of doctors) {
     if (docVars[doc].length > 0) {
       subjectTo.push({ name: `cap_${doc}`, vars: docVars[doc], bnds: { type: glpk.GLP_UP, lb: 0, ub: plan.cap[doc] ?? MAX_GARDES_PER_MONTH } });
+    }
+    // Weekend cap (Fri/Sat/Sun): ≤ plan.weCap per doctor per month.
+    if (docWeVars[doc].length > 0 && plan.weCap < 31) {
+      subjectTo.push({ name: `wecap_${doc}`, vars: docWeVars[doc], bnds: { type: glpk.GLP_UP, lb: 0, ub: plan.weCap } });
     }
   }
   // Forced G+ (≤ 2 wishers that day): the doctor's garde on that day is REQUIRED.
@@ -460,6 +536,7 @@ function polishEquity(
   carryWeekend: Record<DoctorId, number>,
   fte: Record<DoctorId, number>,
   plan: WishPlan,
+  forceG2: Set<DoctorId>,
 ) {
   const isBlocked = (d: number, doc: DoctorId) => (blocked[doc] ?? []).includes(d);
   const dayList: Record<DoctorId, Set<number>> = {};
@@ -469,14 +546,16 @@ function polishEquity(
   const cumCount: Record<DoctorId, number> = {};
   const cumHeavy: Record<DoctorId, number> = {};
   const cumWe: Record<DoctorId, number> = {};
-  // THIS-month count per doctor — the monthly cap applies to it (not to the carry).
+  // THIS-month counts per doctor — the monthly caps apply to them (not to the carry).
   const monthCount: Record<DoctorId, number> = {};
+  const monthWe: Record<DoctorId, number> = {};
   for (const doc of doctors) {
     dayList[doc] = new Set();
     cumCount[doc] = carryCount[doc] ?? 0;
     cumHeavy[doc] = carryHeavy[doc] ?? 0;
     cumWe[doc] = carryWeekend[doc] ?? 0;
     monthCount[doc] = 0;
+    monthWe[doc] = 0;
   }
   days.forEach((cd, di) => {
     const heavy = isHeavy(cd);
@@ -485,17 +564,19 @@ function polishEquity(
       cumCount[doc] += 1;
       monthCount[doc] += 1;
       if (heavy) cumHeavy[doc] += 1;
-      if (isGardeWeekend(cd)) cumWe[doc] += 1;
+      if (isGardeWeekend(cd)) { cumWe[doc] += 1; monthWe[doc] += 1; }
     }
   });
 
   const N = days.length; // number of calendar days in the month
   const hasGarde = (doc: DoctorId, day: number) => dayList[doc].has(day);
   // b can take day d only if it keeps a ≥3-day gap: no garde on d-2,d-1,d+1,d+2 (and not on d) —
-  // and it must respect the wish plan: the monthly cap holds (forced G+ days never move at all).
+  // and it must respect the wish plan: monthly cap AND weekend cap hold (forced G+ never move).
+  const dayByNum = new Map(days.map((cd) => [cd.day, cd]));
   const canTake = (b: DoctorId, d: number) =>
     !isBlocked(d, b) &&
     monthCount[b] < (plan.cap[b] ?? MAX_GARDES_PER_MONTH) &&
+    (!isGardeWeekend(dayByNum.get(d)!) || monthWe[b] < plan.weCap) &&
     !hasGarde(b, d) &&
     !hasGarde(b, d - 1) && !hasGarde(b, d + 1) &&
     !hasGarde(b, d - 2) && !hasGarde(b, d + 2);
@@ -535,7 +616,43 @@ function polishEquity(
   const W_COUNT = 10; // equal NUMBER of gardes — most important
   const W_WE = 3; // Sat/Sun fairness
   const W_HEAVY = 1.5; // Thu→Sun fairness
+  // Spread the partners of forceG2 doctors (a shared day FORCES the partner into G1). Must beat
+  // the ~2×W_COUNT cost of a count-neutralizing move so a 3rd pairing (Δpair −4) gets broken
+  // (6×−4 = −24 < −20), while a 2nd pairing (Δpair −2 → −12) is tolerated — with ≥3 gardes the
+  // partner still has enough free edges for the role-repair phase to rebalance.
+  const W_PAIR = 6;
   const W_SPREAD = 0.3; // even monthly spacing (secondary refinement)
+
+  // Pairings with forceG2 doctors: every day shared with one forces the partner into G1, so
+  // repeated pairings make |G1−G2| balance impossible for that partner. Quadratic penalty on the
+  // per-partner pairing count spreads Dzierzek's partners across the roster.
+  const pcnt: Record<DoctorId, Record<DoctorId, number>> = {};
+  for (const f of forceG2) pcnt[f] = {};
+  days.forEach((_, di) => {
+    const [x, y] = assigned[di];
+    if (x !== undefined && y !== undefined) {
+      if (forceG2.has(x)) pcnt[x][y] = (pcnt[x][y] ?? 0) + 1;
+      if (forceG2.has(y)) pcnt[y][x] = (pcnt[y][x] ?? 0) + 1;
+    }
+  });
+  // Cost delta of replacing partner a by b on a day shared with the OTHER doctor o.
+  const pairDelta = (o: DoctorId, a: DoctorId, b: DoctorId): number => {
+    let delta = 0;
+    if (forceG2.has(o)) {
+      const pa = pcnt[o][a] ?? 0;
+      const pb = pcnt[o][b] ?? 0;
+      delta += sq(pa - 1) - sq(pa) + sq(pb + 1) - sq(pb);
+    }
+    if (forceG2.has(a)) {
+      const po = pcnt[a][o] ?? 0;
+      delta += sq(po - 1) - sq(po);
+    }
+    if (forceG2.has(b)) {
+      const po = pcnt[b][o] ?? 0;
+      delta += sq(po + 1) - sq(po);
+    }
+    return delta;
+  };
 
   const sc: Record<DoctorId, number> = {};
   for (const doc of doctors) sc[doc] = spreadCost(dayList[doc]);
@@ -563,6 +680,9 @@ function polishEquity(
           if (we) {
             delta += W_WE * (sq(cumWe[a] - 1 - tgtWe[a]) + sq(cumWe[b] + 1 - tgtWe[b]) - sq(cumWe[a] - tgtWe[a]) - sq(cumWe[b] - tgtWe[b]));
           }
+          // Pairing spread with forceG2 doctors (the day's OTHER doctor stays).
+          const o = assigned[di][0] === a ? assigned[di][1] : assigned[di][0];
+          if (o !== undefined) delta += W_PAIR * pairDelta(o, a, b);
           // Spread delta: recompute the two doctors' spacing cost with the garde moved a→b.
           const aSet = new Set(dayList[a]); aSet.delete(cd.day);
           const bSet = new Set(dayList[b]); bSet.add(cd.day);
@@ -580,6 +700,16 @@ function polishEquity(
     if (!best) break;
     const { di, a, b, scA, scB } = best;
     const cd = days[di];
+    // Update forceG2 pairing counts before rewriting the day's pair.
+    const stay = assigned[di][0] === a ? assigned[di][1] : assigned[di][0];
+    if (stay !== undefined) {
+      if (forceG2.has(stay)) {
+        pcnt[stay][a] = (pcnt[stay][a] ?? 0) - 1;
+        pcnt[stay][b] = (pcnt[stay][b] ?? 0) + 1;
+      }
+      if (forceG2.has(a)) pcnt[a][stay] = (pcnt[a][stay] ?? 0) - 1;
+      if (forceG2.has(b)) pcnt[b][stay] = (pcnt[b][stay] ?? 0) + 1;
+    }
     assigned[di] = assigned[di].map((x) => (x === a ? b : x));
     dayList[a].delete(cd.day);
     dayList[b].add(cd.day);
@@ -596,6 +726,8 @@ function polishEquity(
     if (isGardeWeekend(cd)) {
       cumWe[a] -= 1;
       cumWe[b] += 1;
+      monthWe[a] -= 1;
+      monthWe[b] += 1;
     }
   }
 }

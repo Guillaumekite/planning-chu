@@ -51,7 +51,9 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   const dirty = JSON.stringify(saved) !== JSON.stringify(pending) || JSON.stringify(savedUniv) !== JSON.stringify(pendingUniv);
   const stateOf = (name: string, day: number): Availability => pending[name]?.[day] ?? 'dispo';
   const univOf = (name: string, day: number): boolean => !!pendingUniv[name]?.[day];
-  const hasUniversitaire = doctors.some((d) => d.universitaire);
+  // The Univ brush is ALWAYS offered to the admin (even before any doctor has the flag, so the
+  // button is discoverable); for doctors it appears once at least one universitaire exists.
+  const hasUniversitaire = isAdmin || doctors.some((d) => d.universitaire);
 
   function cellLook(name: string, day: number): { label: string; cls: string } {
     const st = stateOf(name, day);
@@ -93,6 +95,8 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   function apply(name: string, day: number) {
     setSavedMsg('');
     if (brush === 'univ') {
+      // Univ days are only meaningful for universitaire doctors — ignore clicks on other rows.
+      if (!doctors.find((d) => d.name === name)?.universitaire) return;
       setPendingUniv((p) => {
         const row = { ...(p[name] ?? {}) };
         if (row[day]) delete row[day]; else row[day] = true;
