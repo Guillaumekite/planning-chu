@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { solvePlanning } from '@/engine/planning';
+import { getLatestPublishedBefore } from '@/lib/plannings';
 
 // The GLPK solver is native (WASM) → this route must run on the Node.js runtime.
 export const runtime = 'nodejs';
@@ -11,9 +12,13 @@ const ProfileSchema = z.object({
   universitaire: z.boolean().optional(),
   universityRatio: z.number().min(0).max(100).optional(),
   fte: z.number().min(0).max(1).optional(),
-  acupuncture: z.boolean().optional(),
+  acupuncture: z.boolean().optional(), // legacy : équivaut à acuLundi + acuMercredi
+  acuLundi: z.boolean().optional(),
+  acuMercredi: z.boolean().optional(),
   douleurPoids: z.number().int().min(0).max(2).optional(),
   forceG2: z.boolean().optional(), // "Jamais G1" — jamais le rôle G1 (ex. Dzierzek)
+  noS: z.boolean().optional(), // jamais le poste S
+  presence: z.boolean().optional(), // éligible au poste P (≥ 12 travaillants)
 });
 
 const BodySchema = z.object({
@@ -55,6 +60,16 @@ export async function POST(req: Request) {
   }
 
   try {
+    // Cross-month garde equity: the previous PUBLISHED month's monthly counters become this
+    // month's carry — a doctor who took the painful weekends last month is relieved this month.
+    // One-month lookback (not the full history) so returning/new doctors aren't hammered.
+    const prev = await getLatestPublishedBefore(input.year, input.month);
+    const prevEq = (prev?.garde_equity ?? {}) as {
+      count?: Record<string, number>;
+      heavyCount?: Record<string, number>;
+      weekendCount?: Record<string, number>;
+    };
+
     const result = await solvePlanning({
       year: input.year,
       month: input.month,
@@ -65,6 +80,9 @@ export async function POST(req: Request) {
       profiles: input.profiles,
       acupuncture: input.acupuncture,
       univConstraints: input.univConstraints,
+      carryCount: prevEq.count,
+      carryHeavy: prevEq.heavyCount,
+      carryWeekend: prevEq.weekendCount,
     });
     return NextResponse.json(result);
   } catch (e) {

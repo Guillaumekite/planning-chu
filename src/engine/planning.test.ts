@@ -93,24 +93,33 @@ describe('solvePlanning — gardes & structure', () => {
     }
   });
 
-  it('compensates Saturday gardes with the following Monday off when team ≥ 12', async () => {
-    const docs = doctors(12);
-    const res = await solvePlanning({ year: 2026, month: 4, doctors: docs });
-    if (res.status !== 'feasible') throw new Error('expected feasible');
-    let checked = 0;
-    for (const cd of res.days) {
-      if (cd.weekday !== 5) continue; // Saturday
-      const mondayDay = cd.day + 2;
-      const md = res.days.find((x) => x.day === mondayDay);
-      if (!md || md.weekday !== 0) continue;
-      for (const doc of docs) {
-        if (['G1', 'G2'].includes(res.grid[doc][cd.day])) {
-          expect(!res.grid[doc][mondayDay]).toBe(true); // off (blank) that Monday
-          checked++;
-        }
+  it('récup ladder: 13 working → Saturday G1 off Monday; 14 → the G2 too; 12 → nobody', async () => {
+    const run = async (n: number) => {
+      const res = await solvePlanning({ year: 2026, month: 4, doctors: doctors(n) });
+      if (res.status !== 'feasible') throw new Error('expected feasible');
+      return res;
+    };
+    const [r12, r13, r14] = await Promise.all([run(12), run(13), run(14)]);
+    const checkMondays = (
+      res: Awaited<ReturnType<typeof run>>, docs: string[],
+      expectG1Off: boolean, expectG2Off: boolean,
+    ) => {
+      let sats = 0;
+      for (const cd of res.days) {
+        if (cd.weekday !== 5) continue; // Saturday
+        const monday = cd.day + 2;
+        if (!res.days.find((x) => x.day === monday && x.weekday === 0)) continue;
+        const g1 = docs.find((d) => res.grid[d][cd.day] === 'G1')!;
+        const g2 = docs.find((d) => res.grid[d][cd.day] === 'G2')!;
+        expect(!res.grid[g1][monday]).toBe(expectG1Off);
+        expect(!res.grid[g2][monday]).toBe(expectG2Off);
+        sats++;
       }
-    }
-    expect(checked).toBeGreaterThan(0);
+      expect(sats).toBeGreaterThan(0);
+    };
+    checkMondays(r12, doctors(12), false, false); // 12 travaillants < 13 → no récup at all
+    checkMondays(r13, doctors(13), true, false); // 13 → the Saturday G1 rests Monday, not the G2
+    checkMondays(r14, doctors(14), true, true); // 14 → both Saturday gardes rest Monday
   });
 
   it('puts RS the weekday after a garde', async () => {

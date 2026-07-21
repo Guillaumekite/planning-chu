@@ -41,13 +41,21 @@ export interface DoctorProfile {
   universityRatio?: number;
   /** Full-time-equivalent fraction (0-1). Part-timers get proportionally fewer gardes. Default 1. */
   fte?: number;
-  /** This doctor does acupuncture (post ACU) every Monday when present (e.g. Dr Dzierzek). */
+  /** Legacy single acupuncture flag — equivalent to acuLundi + acuMercredi together. */
   acupuncture?: boolean;
+  /** ACU on Mondays when present (Dr Dzierzek). */
+  acuLundi?: boolean;
+  /** ACU on Wednesdays (moved to Thursday when on garde Tuesday). */
+  acuMercredi?: boolean;
   /** Consultation douleur (CD) weight: 0 = not eligible (default), 1 = simple, 2 = double (Esbuy). */
   douleurPoids?: number;
   /** "Jamais G1" : never the G1 role, only G2 (Dr Dzierzek — back problems). Independent of
    * acupuncture, even though today the same person carries both flags. */
   forceG2?: boolean;
+  /** "Pas de S" : never assigned the S post. */
+  noS?: boolean;
+  /** Eligible for the P (présence) post — assigned only when ≥ 12 travaillants. */
+  presence?: boolean;
 }
 
 export interface PlanningInput {
@@ -66,6 +74,11 @@ export interface PlanningInput {
    * When empty/absent, U days are auto-placed by universityRatio as before.
    */
   univConstraints?: Record<DoctorId, number[]>;
+  /** Cross-month garde equity: the previous published month's counters (count / heavy / weekend)
+   * per doctor. A doctor overloaded last month is relieved this month. */
+  carryCount?: Record<DoctorId, number>;
+  carryHeavy?: Record<DoctorId, number>;
+  carryWeekend?: Record<DoctorId, number>;
 }
 
 export type PlanningResult =
@@ -153,12 +166,19 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     if (wd.length) wishes[doc] = [...new Set([...(wishes[doc] ?? []), ...wd])];
   }
 
-  // Acupuncture doctors do ACU on Mondays but stay normal for garde eligibility. If the schedule
-  // puts one on a Monday garde, it must be G2 (evening from 18h) — see the G2-forcing step below.
-  const acupuncture = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acupuncture));
+  // Acupuncture split by day: "Acu lundi" and "Acu mercredi" checkboxes; the legacy single
+  // `acupuncture` flag counts as both. The union (`acuDocs`) drives the shared acu rules:
+  // ACU+G2 evening gardes, MM/MS maternity trigger, and the récup exemption.
+  const legacyAcu = (doc: DoctorId) => !!input.profiles?.[doc]?.acupuncture;
+  const acuLundi = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acuLundi || legacyAcu(doc)));
+  const acuMercredi = new Set(doctors.filter((doc) => input.profiles?.[doc]?.acuMercredi || legacyAcu(doc)));
+  const acuDocs = new Set([...acuLundi, ...acuMercredi]);
   // "Jamais G1" — doctors who NEVER take the G1 role (Dzierzek: back problems). Independent flag,
   // plus the acupuncture doctors (their evening-G2-after-ACU rule still requires G2-only).
-  const neverG1 = new Set(doctors.filter((doc) => input.profiles?.[doc]?.forceG2 || input.profiles?.[doc]?.acupuncture));
+  const neverG1 = new Set(doctors.filter((doc) => input.profiles?.[doc]?.forceG2 || acuDocs.has(doc)));
+  // "Pas de S" and "P" (présence) eligibility.
+  const noS = new Set(doctors.filter((doc) => input.profiles?.[doc]?.noS));
+  const presenceDocs = new Set(doctors.filter((doc) => input.profiles?.[doc]?.presence));
 
   // University-constraint days ("Univ") the doctor declared themselves. Honored only for universitaire
   // doctors and only on weekdays (university is a weekday activity). A doctor with ≥1 declared day gets
@@ -180,18 +200,23 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     if (blocked.length) gardeBlocked[doc] = [...new Set(blocked)];
   }
 
-  // Garde fairness weight = part-time fraction × garde-availability fraction (days NOT blocked).
+  // Garde fairness weight = part-time fraction × availability fraction — where the availability
+  // fraction EXCLUDES the part-time off days (the fte factor already covers those; counting them
+  // twice used to give a 50% doctor only ~32% of a full-timer's gardes instead of 50%).
   const totalDays = days.length;
   const gardeWeight: Record<DoctorId, number> = {};
   for (const doc of doctors) {
-    const blockedSet = new Set(gardeBlocked[doc] ?? []);
-    const gardeDays = days.filter((cd) => !blockedSet.has(cd.day)).length;
-    gardeWeight[doc] = fte[doc] * (gardeDays / totalDays);
+    const nonTpBlocked = new Set<number>();
+    for (const cd of days) if (!GARDEABLE(avail(input, doc, cd.day))) nonTpBlocked.add(cd.day);
+    for (const d of univDays[doc]) if (d - 1 >= 1) nonTpBlocked.add(d - 1);
+    gardeWeight[doc] = fte[doc] * ((totalDays - nonTpBlocked.size) / totalDays);
   }
 
   const gardeInput: GardeInput = {
     year: input.year, month: input.month, doctors,
     gardeBlocked, holidays: input.holidays, wishes, fte: gardeWeight,
+    // Cross-month equity: last published month's counters relieve whoever was overloaded.
+    carryCount: input.carryCount, carryHeavy: input.carryHeavy, carryWeekend: input.carryWeekend,
     // "Jamais G1" doctors (Dzierzek) + acupuncture doctors are ALWAYS G2 — role balancer rule.
     forceG2: [...neverG1],
   };
@@ -206,7 +231,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // Guard-rail: ACU active but nobody carries the profile → the flag was probably lost in the
   // doctor sheet. Without it there is NO forced G2 and NO ACU day — exactly the "Dzierzek gets
   // G1s and her ACU disappeared" symptom — so surface it loudly instead of failing silently.
-  if (acuOn && acupuncture.size === 0) {
+  if (acuOn && acuDocs.size === 0) {
     warnings.push(
       'Acupuncture activée mais aucun médecin du roster n\'a le profil « Acu lun. » : aucun ACU ne sera posé. ' +
         'Vérifie la fiche du médecin acupuncture (et la case « Jamais G1 » pour Dzierzek).',
@@ -302,11 +327,11 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     else grid[doc][day] = 'ACU';
   };
   if (acuOn) {
-    for (const doc of acupuncture) {
-      for (const cd of days) {
-        if (cd.weekday === 0) {
-          placeAcu(doc, cd.day); // Monday
-        } else if (cd.weekday === 2) {
+    for (const cd of days) {
+      if (cd.weekday === 0) {
+        for (const doc of acuLundi) placeAcu(doc, cd.day); // Monday
+      } else if (cd.weekday === 2) {
+        for (const doc of acuMercredi) {
           if (isGarde(doc, cd.day - 1)) {
             // Tuesday garde → Wednesday RS → move ACU to Thursday.
             const thu = days.find((x) => x.day === cd.day + 1 && x.weekday === 3);
@@ -319,10 +344,10 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     }
   }
 
-  // Récup (comp-off): a SATURDAY-garde doctor gets the following Monday off — only when that
-  // Monday's working count (before récup) allows it: ≥ 12 travaillants, or ≥ 13 when a CD is
-  // posable that Monday (a douleur doctor works). Based on WORKING doctors, never roster size.
-  // The acupuncture doctor is never compensated (keeps her Monday ACU).
+  // Récup (comp-off) — échelle des travaillants du lundi (récup et RS comptent dedans) :
+  //   ≥ 13 → le G1 du samedi a son lundi off ; ≥ 14 → le G2 du samedi aussi.
+  // Based on WORKING doctors, never roster size. The acupuncture doctor is never compensated
+  // (keeps her Monday ACU).
   for (const cd of days) {
     if (cd.weekday !== 5) continue; // Saturday
     const g = gardeByDay[cd.day];
@@ -330,27 +355,33 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     const md = days.find((x) => x.day === cd.day + 2);
     if (!md || md.weekday !== 0 || md.isHoliday) continue;
     const working = workingCount(md.day);
-    const cdPossible = doctors.some((doc) => douleurPoids[doc] >= 1 && isWorking(doc, md.day));
-    if (working < (cdPossible ? 13 : 12)) continue;
-    for (const doc of [g.G1, g.G2]) {
+    const granted: (DoctorId | undefined)[] = [];
+    if (working >= 13) granted.push(g.G1);
+    if (working >= 14) granted.push(g.G2);
+    for (const doc of granted) {
       if (!doc) continue;
-      if (acuOn && acupuncture.has(doc)) continue;
+      if (acuOn && acuDocs.has(doc)) continue;
       if (!basePresent(doc, md.day) || grid[doc][md.day]) continue; // congé/TP, or RS/U/ACU already there
       compOff.add(`${doc}|${md.day}`);
     }
   }
 
   // Pass 3 — day posts (weekdays only). MANDATORY core per the staffing table, then extras
-  // strictly limited to the spare capacity beyond the core (never at its expense):
+  // following the working-count ladder, strictly limited to the spare capacity beyond the core:
   //   Core (priority order): [BM-BS if a U+G1 that day], BM, BM, S, then CS1+CS2 (≥ 9 working)
   //   or a single alternating CS (8 working — weekly + monthly CS1/CS2 balance kept even).
-  //   Extras: CD (douleur-weighted), Ped (Mon/Wed/Thu/Fri), MM/MS (ONLY when the acupuncture
-  //   doctor is on garde that day AND ≥ 12 working; MS when the garde follows a daytime ACU),
-  //   a 3rd BM (≥ 10 working). Whoever is left → HC.
+  //   Extras ladder: Ped (Mon/Wed/Thu/Fri) · 3rd BM (≥ 10) · CD (≥ 11, douleur-weighted) ·
+  //   P (≥ 12, présence-flagged doctors only) · MM/MS (≥ 12 AND the acupuncture doctor on garde;
+  //   MS when her garde follows a daytime ACU). Whoever is left → HC (the admin adjusts manually
+  //   beyond 14: HC or off for doctors already above 48h/week).
   const postCount: Record<DoctorId, Record<string, number>> = {};
-  for (const doc of doctors) postCount[doc] = {};
+  const totalPosts: Record<DoctorId, number> = {};
+  for (const doc of doctors) { postCount[doc] = {}; totalPosts[doc] = 0; }
   const csWeek = new Map<number, { CS1: number; CS2: number }>();
   const csMonth = { CS1: 0, CS2: 0 };
+  // Deterministic rotation for tie-breaks: the alphabetical order shifted by the day number, so
+  // early-sorted names no longer systematically win every tie.
+  const alphaIdx = new Map([...doctors].sort((a, b) => a.localeCompare(b)).map((d, i) => [d, i]));
 
   for (const cd of days) {
     // Weekend / holiday: only gardes + RS exist. Everyone else present is off (blank).
@@ -366,13 +397,18 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     const assign = (doc: DoctorId, post: string) => {
       grid[doc][cd.day] = post;
       postCount[doc][post] = (postCount[doc][post] ?? 0) + 1;
+      totalPosts[doc] += 1;
       pool = pool.filter((d) => d !== doc);
     };
-    // Pick the pool doctor who has done `post` the fewest times (deterministic) — anyone can do any post.
-    const leastFor = (post: string): DoctorId | undefined =>
-      [...pool].sort((a, b) => {
+    // Fairness pick: fewest of THIS post, then lightest total Pass-3 load (so specialty doctors
+    // don't also top the generic posts), then day-rotated deterministic order.
+    const rot = (doc: DoctorId) => ((alphaIdx.get(doc) ?? 0) + cd.day) % doctors.length;
+    const leastFor = (post: string, candidates?: DoctorId[]): DoctorId | undefined =>
+      [...(candidates ?? pool)].sort((a, b) => {
         const ca = postCount[a][post] ?? 0, cb = postCount[b][post] ?? 0;
-        return ca !== cb ? ca - cb : a.localeCompare(b);
+        if (ca !== cb) return ca - cb;
+        if (totalPosts[a] !== totalPosts[b]) return totalPosts[a] - totalPosts[b];
+        return rot(a) - rot(b);
       })[0];
 
     // Which CS runs today: both at ≥ 9 working; at ≤ 8 only the LAGGING one (weekly balance
@@ -388,9 +424,17 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     if (working >= 9) core.push(lag, lag === 'CS1' ? 'CS2' : 'CS1');
     else core.push(lag);
 
-    // Extras — only with spare capacity beyond the core.
+    // Extras ladder — only with spare capacity beyond the core, gated by the working count.
     let budget = pool.length - core.length;
-    if (budget > 0) {
+    if (budget > 0 && PED_DAYS.has(cd.weekday)) {
+      const doc = leastFor('Ped'); // pédiatrie lun/mer/jeu/ven
+      if (doc) { assign(doc, 'Ped'); budget -= 1; }
+    }
+    if (budget > 0 && working >= 10) {
+      const doc = leastFor('BM'); // 3e bloc quand ≥ 10 travaillants
+      if (doc) { assign(doc, 'BM'); budget -= 1; }
+    }
+    if (budget > 0 && working >= 11) {
       // Consultation douleur (CD) — RESERVED to doctors with a douleur profile (douleurPoids ≥ 1).
       // Esbuy (poids 2) does ~2× the others: lowest CD-count PER unit of weight wins.
       const cdCandidates = pool.filter((doc) => douleurPoids[doc] >= 1);
@@ -398,35 +442,37 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
         const doc = [...cdCandidates].sort((a, b) => {
           const ra = (postCount[a]['CD'] ?? 0) / douleurPoids[a];
           const rb = (postCount[b]['CD'] ?? 0) / douleurPoids[b];
-          return ra !== rb ? ra - rb : a.localeCompare(b);
+          return ra !== rb ? ra - rb : rot(a) - rot(b);
         })[0];
         assign(doc, 'CD');
         budget -= 1;
       }
     }
-    if (budget > 0 && PED_DAYS.has(cd.weekday)) {
-      const doc = leastFor('Ped'); // pédiatrie lun/mer/jeu/ven
-      if (doc) { assign(doc, 'Ped'); budget -= 1; }
+    if (budget > 0 && working >= 12) {
+      // P (présence) — only doctors with the P checkbox.
+      const doc = leastFor('P', pool.filter((d) => presenceDocs.has(d)));
+      if (doc) { assign(doc, 'P'); budget -= 1; }
     }
-    // Maternité : UNIQUEMENT quand le médecin acupuncture est de garde ce jour ET ≥ 12
-    // travaillants. 'MS' (couverture jusqu'à 18h) si sa garde suit un ACU en journée, sinon 'MM'.
+    // Maternité : UNIQUEMENT quand le médecin acupuncture (Dzierzek) est de garde ce jour ET
+    // ≥ 12 travaillants. 'MS' (couverture jusqu'à 18h) si sa garde suit un ACU en journée, sinon 'MM'.
     const g = gardeByDay[cd.day] ?? {};
-    const acuOnGarde = [g.G1, g.G2].some((d) => d && acupuncture.has(d));
+    const acuOnGarde = [g.G1, g.G2].some((d) => d && acuDocs.has(d));
     if (budget > 0 && acuOnGarde && working >= 12) {
       const post = acuG2Days.has(cd.day) ? 'MS' : 'MM';
       const doc = leastFor(post);
       if (doc) { assign(doc, post); budget -= 1; }
     }
-    if (budget > 0 && working >= 10) {
-      const doc = leastFor('BM'); // 3e bloc quand ≥ 10 travaillants
-      if (doc) { assign(doc, 'BM'); budget -= 1; }
-    }
 
     // Core fill — by construction the pool still covers it (extras only consumed the surplus).
+    // "Pas de S": the S post never goes to a flagged doctor; if nobody else remains, S stays
+    // uncovered with a warning (the flagged doctors fall through to the other posts / HC).
     for (const post of core) {
       if (pool.length === 0) break;
-      const doc = leastFor(post);
-      if (!doc) continue;
+      const doc = post === 'S' ? leastFor('S', pool.filter((d) => !noS.has(d))) : leastFor(post);
+      if (!doc) {
+        if (post === 'S') warnings.push(`S non couvert le ${cd.day} : tous les médecins restants ont « Pas de S ».`);
+        continue;
+      }
       assign(doc, post);
       if (post === 'CS1' || post === 'CS2') { wk[post] += 1; csMonth[post] += 1; }
     }

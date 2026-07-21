@@ -47,6 +47,27 @@ export async function getPublished(year: number, month: number): Promise<Plannin
   } as PlanningRow;
 }
 
+/** The most recent published planning strictly BEFORE (year, month) — feeds cross-month garde
+ * equity: its monthly counters become the next generation's carry. */
+export async function getLatestPublishedBefore(year: number, month: number): Promise<PlanningRow | null> {
+  await ensureSchema();
+  const row = await queryOne<Record<string, unknown>>(
+    `SELECT year, month, grid, days, garde_equity FROM plannings
+     WHERE status = 'published' AND (year < $1 OR (year = $1 AND month < $2))
+     ORDER BY year DESC, month DESC LIMIT 1`,
+    [year, month],
+  );
+  if (!row) return null;
+  const parse = (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v);
+  return {
+    year: row.year as number,
+    month: row.month as number,
+    grid: parse(row.grid),
+    days: parse(row.days),
+    garde_equity: parse(row.garde_equity),
+  } as PlanningRow;
+}
+
 export async function listPublishedMonths(): Promise<{ year: number; month: number }[]> {
   await ensureSchema();
   return query<{ year: number; month: number }>(
