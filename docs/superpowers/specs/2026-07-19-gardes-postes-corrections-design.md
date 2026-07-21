@@ -117,3 +117,15 @@ alternance G1/G2 (|G1−G2| ≤ 1) et forceG2, TP 3/2, déterminisme du moteur.
   choix), lendemain-de-RS préféré à égalité parfaite d'équité, rotation neutre en dernier.
 - **Ordre de remplissage** remanié pour donner du choix au moteur CS : extras → [BM-BS], S
   (contrainte « Pas de S ») → CS (pool encore large) → BM/Ped → HC.
+
+## Amendement 2026-07-22 (bis) : RS du temps partiel + auto-vérification
+- **Le RS gagne toujours** : le lendemain d'une garde, RS affiché et compté comme travaillant,
+  même sur un jour non travaillé d'un temps partiel (seul le congé passe avant). Le RS ne
+  consomme PAS le quota temps partiel (les jours travaillés normaux restent inchangés — le RS
+  est un jour affiché « en plus »). Corrige le bug d'août : RS invisible → 8 comptés au lieu
+  de 9 → CS1 disparu + un médecin en HC.
+- **Auto-vérification quotidienne** : après remplissage, contrôle des minimums du jour
+  (S, nb de CS selon l'effectif, 2 blocs dont 1 Ped les lun/mer/jeu/ven, HC interdit à ≤ 10
+  travaillants hors 1er du mois) → tout manque produit un avertissement explicite.
+- **Seuil ACU corrigé : ≥ 10 travaillants** (et plus 9) — le cœur de 9 postes consomme 9 corps,
+  l'ACU est le 10e ; à 9 il affamait un bloc/Ped (débusqué par l'auto-vérification).

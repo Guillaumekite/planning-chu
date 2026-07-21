@@ -249,8 +249,13 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const basePresent = (doc: DoctorId, day: number) =>
     PRESENT(avail(input, doc, day)) && !tpDays[doc].has(day);
   const isGarde = (doc: DoctorId, day: number) => gardeByDay[day]?.G1 === doc || gardeByDay[day]?.G2 === doc;
+  // RS (repos de sécurité) is MANDATORY the day after a garde — it shows and counts even when it
+  // lands on a part-timer's off day (only congé wins). It does NOT consume the part-timer's
+  // worked-days quota: their normal TP pattern stays as computed, the RS is an extra displayed
+  // day. (An hidden RS used to make the working count 8 instead of 9 → a CS slot vanished and a
+  // doctor fell to HC.)
   const isRS = (doc: DoctorId, day: number) =>
-    basePresent(doc, day) && !isGarde(doc, day) && (gardeByDay[day - 1]?.G1 === doc || gardeByDay[day - 1]?.G2 === doc);
+    PRESENT(avail(input, doc, day)) && !isGarde(doc, day) && (gardeByDay[day - 1]?.G1 === doc || gardeByDay[day - 1]?.G2 === doc);
 
   // Pass 1 — fixed labels: absences, gardes, RS.
   for (const cd of days) {
@@ -308,19 +313,22 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // not assignable to a post (the Pass-3 pool excludes them).
   const U_CELLS = new Set(['U', 'U+G1', 'U+G2']);
   const compOff = new Set<string>(); // `${doctor}|${day}`
+  // An RS cell counts as working even on a part-timer's off day (mandatory rest after a garde).
   const isWorking = (doc: DoctorId, day: number) =>
-    basePresent(doc, day) && !U_CELLS.has(grid[doc][day] ?? '');
+    (basePresent(doc, day) || grid[doc][day] === 'RS') && !U_CELLS.has(grid[doc][day] ?? '');
   const workingCount = (day: number) => doctors.filter((d) => isWorking(d, day)).length;
 
-  // Acupuncture (Mondays + Wednesdays), only when ≥ 9 doctors work that day (below that, every
+  // Acupuncture (Mondays + Wednesdays), only when ≥ 10 doctors work that day (below that, every
   // hand is needed for the mandatory posts). If on the G2 garde that day → 'ACU+G2' (ACU in the
   // day, garde from 18h). Wednesday exception: garde Tuesday (→ Wednesday RS) moves ACU to Thursday.
   const acuG2Days = new Set<number>();
   const placeAcu = (doc: DoctorId, day: number) => {
     const canAcu = grid[doc][day] === 'G2' || (basePresent(doc, day) && !grid[doc][day]);
     if (!canAcu) return;
-    if (workingCount(day) < 9) {
-      warnings.push(`ACU non posé le ${day} : moins de 9 médecins travaillants ce jour-là.`);
+    // ≥ 10: the 9-post core (G1, G2, 2 RS, 2 blocs, S, CS1, CS2) needs 9 bodies — the ACU is a
+    // 10th. At 9 working an ACU would starve a core post (the self-check used to flag it).
+    if (workingCount(day) < 10) {
+      warnings.push(`ACU non posé le ${day} : moins de 10 médecins travaillants (le cœur de 9 postes passe d'abord).`);
       return;
     }
     if (grid[doc][day] === 'G2') { grid[doc][day] = 'ACU+G2'; acuG2Days.add(day); }
@@ -567,7 +575,31 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       const doc = leastFor(post);
       if (doc) assign(doc, post);
     }
+    const hcCount = pool.length;
     for (const doc of [...pool]) assign(doc, 'HC');
+
+    // Self-check: verify the day's MINIMUM posts against its working count and warn about any
+    // gap — a counting bug must show up in the amber banner, never as a silently wrong grid.
+    if (working >= 8) {
+      const nOf = (post: string) => doctors.filter((d) => grid[d][cd.day] === post).length;
+      const missing: string[] = [];
+      if (nOf('S') < 1) missing.push('S');
+      const cs1 = nOf('CS1'), cs2 = nOf('CS2');
+      if (working >= 9) {
+        if (cs1 < 1) missing.push('CS1');
+        if (cs2 < 1) missing.push('CS2');
+      } else if (cs1 + cs2 < 1) missing.push('CS');
+      const ped = nOf('Ped');
+      if (PED_DAYS.has(cd.weekday) && ped < 1) missing.push('Ped');
+      if (!PED_DAYS.has(cd.weekday) && ped > 0) missing.push('Ped un mardi (interdit)');
+      if (nOf('BM') + ped < 2) missing.push('2 blocs (BM/Ped)');
+      if (missing.length) {
+        warnings.push(`Contrôle du ${cd.day} : poste(s) manquant(s) — ${missing.join(', ')} (${working} travaillants comptés).`);
+      }
+      if (hcCount > 0 && working <= 10) {
+        warnings.push(`Contrôle du ${cd.day} : ${hcCount} HC alors que seulement ${working} travaillants — surplus inattendu (1er du mois sans RS ?).`);
+      }
+    }
   }
 
   return { status: 'feasible', days, grid, gardeEquity: gardes.equity, warnings };
