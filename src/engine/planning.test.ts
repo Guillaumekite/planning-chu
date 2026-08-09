@@ -173,6 +173,43 @@ describe('solvePlanning — gardes & structure', () => {
   });
 });
 
+describe('solvePlanning — RS reporté au 1er (garde du dernier jour du mois précédent)', () => {
+  it('carryGardeLastDay : RS le 1er pour les 2 gardes du mois précédent, et pas de garde le 1 ni le 2', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({ year: 2026, month: 8, doctors: docs, carryGardeLastDay: ['D01', 'D02'] });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.grid.D01[1]).toBe('RS');
+    expect(res.grid.D02[1]).toBe('RS');
+    // Règle de repos inter-mois : garde le dernier jour du mois précédent → interdits le 1 et le 2.
+    for (const doc of ['D01', 'D02']) for (const day of [1, 2]) {
+      expect(['G1', 'G2']).not.toContain(res.grid[doc][day]);
+    }
+  });
+
+  it('un médecin reporté mais en congé le 1er reste CA (le congé gagne), toujours pas de garde le 1/2', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({
+      year: 2026, month: 8, doctors: docs,
+      carryGardeLastDay: ['D01'], availability: { D01: { 1: 'conge' } },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.grid.D01[1]).toBe('CA');
+    for (const day of [1, 2]) expect(['G1', 'G2']).not.toContain(res.grid.D01[day]);
+  });
+
+  it('un médecin de carryGardeLastDay absent du roster est ignoré sans planter', async () => {
+    const res = await solvePlanning({ year: 2026, month: 8, doctors: doctors(12), carryGardeLastDay: ['ZZZ'] });
+    expect(res.status).toBe('feasible');
+  });
+
+  it('sans carryGardeLastDay, le 1er n\'a aucun RS reporté (comportement historique inchangé)', async () => {
+    const docs = doctors(12);
+    const res = await solvePlanning({ year: 2026, month: 8, doctors: docs });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(docs.filter((d) => res.grid[d][1] === 'RS')).toHaveLength(0);
+  });
+});
+
 describe('solvePlanning — special posts (open to everyone) & part-time', () => {
   it('U only for universitaires, on weekdays, ≈ ratio of their working days', async () => {
     const docs = doctors(12);

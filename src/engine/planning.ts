@@ -79,6 +79,11 @@ export interface PlanningInput {
   carryCount?: Record<DoctorId, number>;
   carryHeavy?: Record<DoctorId, number>;
   carryWeekend?: Record<DoctorId, number>;
+  /** Médecins de garde le dernier jour du mois calendaire JUSTE précédent (déjà publié).
+   * Reçoivent un RS le 1er du mois, et sont bloqués de garde le 1 et le 2 (règle de repos
+   * inter-mois : garde le dernier jour → RS le 1er → 2 encore interdit → 1re garde possible le 3).
+   * Renseigné par la route uniquement à partir de juillet 2026 et si le mois précédent est contigu. */
+  carryGardeLastDay?: DoctorId[];
 }
 
 export type PlanningResult =
@@ -143,6 +148,11 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const days = buildMonth(input.year, input.month, DEFAULT_WEIGHTS, input.holidays ?? []);
   const doctors = input.doctors;
 
+  // Médecins de garde le dernier jour du mois précédent : leur RS tombe le 1er de ce mois, et la
+  // règle de repos leur interdit une garde le 1 comme le 2 (même mécanisme que la « veille de jour
+  // Univ »). Filtré au roster de ce mois (un médecin parti n'a plus rien à reporter).
+  const carriedRS = new Set((input.carryGardeLastDay ?? []).filter((d) => doctors.includes(d)));
+
   const fte: Record<DoctorId, number> = {};
   for (const doc of doctors) fte[doc] = input.profiles?.[doc]?.fte ?? 1;
 
@@ -197,6 +207,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     for (const cd of days) if (!GARDEABLE(avail(input, doc, cd.day)) || tpDays[doc].has(cd.day)) blocked.push(cd.day);
     // Being at university on day D forbids a garde the day BEFORE: its RS (D) would clash with the fac.
     for (const d of univDays[doc]) if (d - 1 >= 1) blocked.push(d - 1);
+    // Garde le dernier jour du mois précédent → RS le 1er, 2 encore en repos : garde interdite le 1 et 2.
+    if (carriedRS.has(doc)) blocked.push(1, 2);
     if (blocked.length) gardeBlocked[doc] = [...new Set(blocked)];
   }
 
@@ -209,6 +221,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     const nonTpBlocked = new Set<number>();
     for (const cd of days) if (!GARDEABLE(avail(input, doc, cd.day))) nonTpBlocked.add(cd.day);
     for (const d of univDays[doc]) if (d - 1 >= 1) nonTpBlocked.add(d - 1);
+    // Les 2 jours de repos inter-mois réduisent aussi la cible de gardes (comme la veille de jour Univ).
+    if (carriedRS.has(doc)) { nonTpBlocked.add(1); nonTpBlocked.add(2); }
     gardeWeight[doc] = fte[doc] * ((totalDays - nonTpBlocked.size) / totalDays);
   }
 
@@ -255,7 +269,10 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // day. (An hidden RS used to make the working count 8 instead of 9 → a CS slot vanished and a
   // doctor fell to HC.)
   const isRS = (doc: DoctorId, day: number) =>
-    PRESENT(avail(input, doc, day)) && !isGarde(doc, day) && (gardeByDay[day - 1]?.G1 === doc || gardeByDay[day - 1]?.G2 === doc);
+    PRESENT(avail(input, doc, day)) && !isGarde(doc, day) &&
+    ((gardeByDay[day - 1]?.G1 === doc || gardeByDay[day - 1]?.G2 === doc) ||
+      // Le 1er : RS reporté de la garde tenue le dernier jour du mois précédent (garde du 1 bloquée).
+      (day === 1 && carriedRS.has(doc)));
 
   // Pass 1 — fixed labels: absences, gardes, RS.
   for (const cd of days) {
