@@ -55,7 +55,7 @@ export function computePostCounter(
 
     // Contrôle des postes de base.
     const miss = new Set<string>();
-    const pedForbiddenReason = new Set<string>();
+    let pedForbiddenReason: string | null = null;
     if (c.G1 !== 1) miss.add('G1');
     if (c.G2 !== 1) miss.add('G2');
     if (!cd.isWeekend && !cd.isHoliday && work >= 8) {
@@ -70,16 +70,17 @@ export function computePostCounter(
         if (c.Ped < 1) miss.add('Ped');
       } else if (c.Ped > 0) {
         miss.add('Ped');
-        pedForbiddenReason.add('Ped un mardi (interdit)');
+        pedForbiddenReason = 'Ped un mardi (interdit)';
       }
       if (c.BM + c.Ped < 2) miss.add('2 blocs (BM/Ped)');
     }
 
     flagged[day] = miss;
-    const reasonParts = [...miss];
-    if (pedForbiddenReason.size > 0) {
-      reasonParts.push(...pedForbiddenReason);
-    }
+    // Le motif « Ped un mardi (interdit) » remplace le simple « Ped » dans le texte,
+    // mais 'Ped' reste dans `flagged` pour que la ligne Ped soit surlignée en rouge.
+    const reasonParts = [...miss].map((part) =>
+      part === 'Ped' && pedForbiddenReason ? pedForbiddenReason : part,
+    );
     reason[day] = reasonParts.length
       ? `${reasonParts.join(', ')} (${work} travaillants)`
       : '';

@@ -58,6 +58,8 @@ describe('computePostCounter', () => {
     const c = computePostCounter(grid, [tue]);
     expect(c.flagged[6].has('Ped')).toBe(true);
     expect(c.reason[6].toLowerCase()).toContain('mardi');
+    expect(c.reason[6]).not.toContain('Ped, Ped');
+    expect(c.reason[6]).toContain('Ped un mardi (interdit)');
   });
 
   it('checks only G1/G2 on weekends and flags a missing garde', () => {
