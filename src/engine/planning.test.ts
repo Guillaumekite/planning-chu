@@ -520,3 +520,72 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     expect(blankD02).toBeLessThan(blank / 2);
   });
 });
+
+describe('solvePlanning — jours préférés de travail (temps partiel)', () => {
+  it('un TP à 50 % travaille ses jours préférés et reste proche du ratio', async () => {
+    const docs = doctors(11);
+    const wd = weekdaysOf(2026, 4);
+    const pref = [wd[0], wd[3]]; // deux jours de semaine choisis
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { fte: 0.5 } },
+      tpPreferred: { D01: pref },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    // Les jours préférés sont travaillés (poste réel, pas une case vide/off).
+    for (const day of pref) {
+      const cell = res.grid.D01[day] ?? '';
+      expect(cell.length).toBeGreaterThan(0);
+      expect(['CA', 'ABS']).not.toContain(cell);
+    }
+    // Le nombre de jours de semaine travaillés reste ~50 % (tolérance large).
+    const worked = wd.filter((d) => {
+      const c = res.grid.D01[d] ?? '';
+      return c.length > 0 && !['CA', 'ABS'].includes(c);
+    }).length;
+    expect(worked).toBeGreaterThanOrEqual(Math.round(0.5 * wd.length) - 1);
+    expect(worked).toBeLessThanOrEqual(Math.round(0.5 * wd.length) + 2);
+  });
+
+  it('honore TOUS les jours préférés au-delà du quota et avertit l\'admin', async () => {
+    const docs = doctors(11);
+    const wd = weekdaysOf(2026, 4);
+    const pref = wd.slice(0, wd.length - 1); // presque tous les jours de semaine, pour un TP à 50 %
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { fte: 0.5 } },
+      tpPreferred: { D01: pref },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    for (const day of pref) {
+      const cell = res.grid.D01[day] ?? '';
+      expect(cell.length).toBeGreaterThan(0); // tous honorés
+    }
+    expect(res.warnings.some((w) => w.includes('D01') && w.includes('au-delà de son quota'))).toBe(true);
+  });
+
+  it('un jour G+ (souhait_garde) d\'un TP est forcé travaillé (jamais un jour off)', async () => {
+    const docs = doctors(11);
+    const wd = weekdaysOf(2026, 4);
+    const gplus = wd[2];
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { fte: 0.5 } },
+      availability: { D01: { [gplus]: 'souhait_garde' } },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const cell = res.grid.D01[gplus] ?? '';
+    expect(cell.length).toBeGreaterThan(0);
+    expect(['CA', 'ABS']).not.toContain(cell);
+  });
+
+  it('sans jour préféré, la répartition TP automatique est inchangée (non-régression)', async () => {
+    const docs = doctors(11);
+    const a = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D01: { fte: 0.5 } } });
+    const b = await solvePlanning({
+      year: 2026, month: 4, doctors: docs, profiles: { D01: { fte: 0.5 } }, tpPreferred: {},
+    });
+    if (a.status !== 'feasible' || b.status !== 'feasible') throw new Error('expected feasible');
+    expect(b.grid.D01).toEqual(a.grid.D01);
+  });
+});
