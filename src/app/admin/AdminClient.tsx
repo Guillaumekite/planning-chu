@@ -41,8 +41,9 @@ function emptyDays(year: number, month: number, holidays: number[]): GridDay[] {
 export default function AdminClient() {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [rosterIds, setRosterIds] = useState<Set<number>>(new Set());
-  const [year, setYear] = useState(2026);
-  const [month, setMonth] = useState(4);
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
   const [newName, setNewName] = useState('');
   const [holidays, setHolidays] = useState('');
   const [acuOn, setAcuOn] = useState(true);
