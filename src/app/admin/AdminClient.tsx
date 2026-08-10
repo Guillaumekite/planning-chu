@@ -131,6 +131,12 @@ export default function AdminClient() {
       const uDays = Object.entries(perDay).filter(([, v]) => v).map(([d]) => Number(d));
       if (uDays.length) univConstraints[name] = uDays;
     }
+    // Declared part-time preferred working days per doctor (from the orthogonal `tp_work` layer).
+    const tpPreferred: Record<string, number[]> = {};
+    for (const [name, perDay] of Object.entries((availData.tpWork ?? {}) as Record<string, Record<string, boolean>>)) {
+      const tDays = Object.entries(perDay).filter(([, v]) => v).map(([d]) => Number(d));
+      if (tDays.length) tpPreferred[name] = tDays;
+    }
     type Profile = {
       universitaire?: boolean; universityRatio?: number; fte?: number;
       acuLundi?: boolean; acuMercredi?: boolean; douleurPoids?: number;
@@ -153,7 +159,7 @@ export default function AdminClient() {
     try {
       const res = await fetch('/api/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, month, doctors: active.map((d) => d.name), availability, profiles, univConstraints, holidays: parseDays(holidays), acupuncture: acuOn }),
+        body: JSON.stringify({ year, month, doctors: active.map((d) => d.name), availability, profiles, univConstraints, tpPreferred, holidays: parseDays(holidays), acupuncture: acuOn }),
       });
       setResult((await res.json()) as GenResult);
     } catch (e) {

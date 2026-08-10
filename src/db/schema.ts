@@ -59,6 +59,10 @@ ALTER TABLE availability ADD COLUMN IF NOT EXISTS univ boolean NOT NULL DEFAULT 
 -- Optional reason the admin gives when refusing a leave request (shown to the doctor).
 ALTER TABLE availability ADD COLUMN IF NOT EXISTS conge_note text;
 
+-- "TP" : jour qu'un médecin à temps partiel souhaite travailler (marqueur orthogonal à state,
+-- comme univ). Le moteur force ce jour en travaillé et complète le quota automatiquement.
+ALTER TABLE availability ADD COLUMN IF NOT EXISTS tp_work boolean NOT NULL DEFAULT false;
+
 -- Which doctors work a given month (the admin's per-month roster).
 CREATE TABLE IF NOT EXISTS rosters (
   year      integer NOT NULL,

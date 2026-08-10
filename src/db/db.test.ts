@@ -51,4 +51,20 @@ describe('database layer (PGlite)', () => {
     );
     expect(av).toEqual({ state: 'conge', conge_status: 'pending' });
   });
+
+  it('round-trips the tp_work marker on availability', async () => {
+    const doc = await queryOne<{ id: number }>(`SELECT id FROM doctors WHERE name = 'FABRE'`);
+    await query(
+      `INSERT INTO availability (doctor_id, year, month, day, state, tp_work)
+       VALUES ($1, 2026, 9, 12, 'dispo', true)
+       ON CONFLICT (doctor_id, year, month, day)
+       DO UPDATE SET state = EXCLUDED.state, tp_work = EXCLUDED.tp_work`,
+      [doc!.id],
+    );
+    const av = await queryOne<{ state: string; tp_work: boolean }>(
+      `SELECT state, tp_work FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 9 AND day = 12`,
+      [doc!.id],
+    );
+    expect(av).toEqual({ state: 'dispo', tp_work: true });
+  });
 });

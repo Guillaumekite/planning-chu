@@ -84,6 +84,13 @@ export interface PlanningInput {
    * inter-mois : garde le dernier jour → RS le 1er → 2 encore interdit → 1re garde possible le 3).
    * Renseigné par la route uniquement à partir de juillet 2026 et si le mois précédent est contigu. */
   carryGardeLastDay?: DoctorId[];
+  /**
+   * Par médecin à temps partiel : jours de semaine (1-based) DÉCLARÉS comme souhaités
+   * travaillés ("TP"). Ces jours (union avec les jours souhait_garde) sont TOUJOURS travaillés ;
+   * le reste du quota (ratio) est complété automatiquement. Un dépassement du quota est honoré
+   * et signalé dans `warnings`.
+   */
+  tpPreferred?: Record<DoctorId, number[]>;
 }
 
 export type PlanningResult =
@@ -122,6 +129,7 @@ function computeTpDays(
   days: CalendarDay[],
   isAvailWeekday: (day: number) => boolean,
   ratio: number,
+  forced: Set<number>,
 ): Set<number> {
   const byWeek = new Map<number, number[]>();
   for (const cd of days) {
@@ -137,8 +145,15 @@ function computeTpDays(
     credit += ratio * group.length;
     let work = Math.floor(credit + 0.5);
     work = Math.max(0, Math.min(group.length, work));
-    credit -= work;
-    const working = new Set(pickEven(group, work));
+    // Forced working days (declared "TP" or souhait_garde) are ALWAYS worked; auto-fill the rest
+    // up to the weekly target. Honoring more forced days than the target this week pushes the
+    // credit negative → later weeks fill fewer days, keeping the month close to the ratio.
+    const working = new Set(group.filter((d) => forced.has(d)));
+    if (working.size < work) {
+      const remaining = group.filter((d) => !working.has(d));
+      for (const d of pickEven(remaining, work - working.size)) working.add(d);
+    }
+    credit -= working.size;
     for (const day of group) if (!working.has(day)) tp.add(day);
   }
   return tp;
@@ -161,12 +176,30 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   for (const doc of doctors) douleurPoids[doc] = input.profiles?.[doc]?.douleurPoids ?? 0;
 
   // Part-time off days (TP): part-timers don't work every day — ~fte of their present weekdays,
-  // in a 3/2-style weekly alternation. Those off days get no post and look like any day off.
+  // in a 3/2-style weekly alternation. Days DECLARED "TP" (input.tpPreferred) or wished for a
+  // garde (souhait_garde) are forced working; the rest of the quota is auto-filled. Off days get
+  // no post and look like any day off.
+  const tpPreferred = input.tpPreferred ?? {};
+  const tpWarnings: string[] = [];
   const tpDays: Record<DoctorId, Set<number>> = {};
   for (const doc of doctors) {
-    tpDays[doc] = fte[doc] < 1
-      ? computeTpDays(days, (day) => PRESENT(avail(input, doc, day)), fte[doc])
-      : new Set<number>();
+    if (fte[doc] >= 1) { tpDays[doc] = new Set(); continue; }
+    const pref = new Set(tpPreferred[doc] ?? []);
+    const forced = new Set<number>();
+    let availWeekdays = 0;
+    for (const cd of days) {
+      if (cd.isWeekend || cd.isHoliday || !PRESENT(avail(input, doc, cd.day))) continue;
+      availWeekdays++;
+      if (pref.has(cd.day) || avail(input, doc, cd.day) === 'souhait_garde') forced.add(cd.day);
+    }
+    tpDays[doc] = computeTpDays(days, (day) => PRESENT(avail(input, doc, day)), fte[doc], forced);
+    const target = Math.round(fte[doc] * availWeekdays);
+    if (forced.size > target) {
+      tpWarnings.push(
+        `${doc} (TP ${Math.round(fte[doc] * 100)} %) : ${forced.size} jours souhaités travaillés ` +
+          `au-delà de son quota (~${target}) — tous honorés.`,
+      );
+    }
   }
 
   // Wishes (souhait_garde) feed the garde optimiser's soft preference.
@@ -237,6 +270,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const gardes = await solveGardes(gardeInput);
   if (gardes.status === 'infeasible') return gardes;
   const warnings = [...gardes.warnings];
+  warnings.push(...tpWarnings);
 
   const gardeByDay: Record<number, { G1?: DoctorId; G2?: DoctorId }> = {};
   for (const a of gardes.assignments) (gardeByDay[a.day] ??= {})[a.role] = a.doctorId;
