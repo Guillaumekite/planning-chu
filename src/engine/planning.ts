@@ -170,11 +170,10 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // garde (souhait_garde) are forced working; the rest of the quota is auto-filled. Off days get
   // no post and look like any day off.
   const tpPreferred = input.tpPreferred ?? {};
-  const forcedWork: Record<DoctorId, Set<number>> = {};
   const tpWarnings: string[] = [];
   const tpDays: Record<DoctorId, Set<number>> = {};
   for (const doc of doctors) {
-    if (fte[doc] >= 1) { forcedWork[doc] = new Set(); tpDays[doc] = new Set(); continue; }
+    if (fte[doc] >= 1) { tpDays[doc] = new Set(); continue; }
     const pref = new Set(tpPreferred[doc] ?? []);
     const forced = new Set<number>();
     let availWeekdays = 0;
@@ -183,7 +182,6 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       availWeekdays++;
       if (pref.has(cd.day) || avail(input, doc, cd.day) === 'souhait_garde') forced.add(cd.day);
     }
-    forcedWork[doc] = forced;
     tpDays[doc] = computeTpDays(days, (day) => PRESENT(avail(input, doc, day)), fte[doc], forced);
     const target = Math.round(fte[doc] * availWeekdays);
     if (forced.size > target) {

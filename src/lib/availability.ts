@@ -104,9 +104,10 @@ export async function setCongeStatus(
 
 /**
  * Upsert one day for one doctor. `state` is the garde/congé preference; `univ` is the orthogonal
- * university-constraint marker. The row is cleared only when it carries NO information at all
- * (state = 'dispo' AND not univ) — so a "at the fac, no garde preference" day survives. A congé day
- * can never be a univ day (absent ≠ at university), so univ is forced off then.
+ * university-constraint marker; `tpWork` is the part-time preferred-working-day marker. The row is
+ * cleared only when it carries NO information at all (state = 'dispo' AND not univ AND not tpWork)
+ * — so a "at the fac, no garde preference" day survives. A congé day can never be a univ or tpWork day
+ * (absent ≠ constraint), so both are forced off then.
  */
 export async function setCell(
   doctorId: number,
