@@ -118,6 +118,10 @@ Insertion dans `AdminClient.tsx`, **sous** `PlanningGrid` et **au-dessus** de
 
 Ordre vertical dans l'export : **planning → compteur → équité**, empilés.
 
+**Excel et CSV ont le même contenu et le même agencement** (mêmes blocs, mêmes lignes
+Travaillants / Contrôle / Motif). Seule différence : la couleur, impossible en CSV — le
+rouge d'une case en défaut y est remplacé par le marqueur `!`.
+
 - **Excel** : passage d'une feuille « Équité » séparée à **une seule feuille empilée** :
   grille du planning, 1 ligne vide, matrice compteur (mêmes colonnes-jours → alignée),
   ligne **Travaillants**, ligne **Contrôle** (`✓`/`✗`), puis — pour chaque jour signalé —
