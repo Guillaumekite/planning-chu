@@ -7,13 +7,14 @@ import { MONTHS_FR, WEEKDAYS_FR, AVAIL_STATES, AVAIL_INFO, type Availability } f
 import { buildMonth } from '@/engine/calendar';
 import { DEFAULT_WEIGHTS } from '@/engine/types';
 
-type Doc = { id: number; name: string; universitaire: boolean };
+type Doc = { id: number; name: string; universitaire: boolean; partTime: boolean };
 type Avail = Record<string, Record<number, Availability>>;
 type Conge = Record<string, Record<number, string>>;
 type CongeNote = Record<string, Record<number, string>>;
 type UnivMap = Record<string, Record<number, boolean>>;
-/** The garde-preference palette states plus the orthogonal "univ" toggle brush. */
-type Brush = Availability | 'univ';
+type TpMap = Record<string, Record<number, boolean>>;
+/** The garde-preference palette states plus the orthogonal "univ" / "tp" brushes. */
+type Brush = Availability | 'univ' | 'tp';
 
 export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; doctorId: number | null }) {
   const [doctors, setDoctors] = useState<Doc[]>([]);
@@ -25,13 +26,15 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   const [congeNote, setCongeNote] = useState<CongeNote>({});
   const [savedUniv, setSavedUniv] = useState<UnivMap>({});
   const [pendingUniv, setPendingUniv] = useState<UnivMap>({});
+  const [savedTp, setSavedTp] = useState<TpMap>({});
+  const [pendingTp, setPendingTp] = useState<TpMap>({});
   const [brush, setBrush] = useState<Brush>('souhait_garde');
   const [savedMsg, setSavedMsg] = useState('');
 
   useEffect(() => {
     fetch('/api/doctors').then((r) => (r.ok ? r.json() : { doctors: [] })).then((d) => {
-      const all: Doc[] = (d.doctors ?? []).map((x: { id: number; name: string; universitaire?: boolean }) =>
-        ({ id: x.id, name: x.name, universitaire: !!x.universitaire }));
+      const all: Doc[] = (d.doctors ?? []).map((x: { id: number; name: string; universitaire?: boolean; part_time?: boolean }) =>
+        ({ id: x.id, name: x.name, universitaire: !!x.universitaire, partTime: !!x.part_time }));
       setDoctors(isAdmin ? all : all.filter((x) => x.id === doctorId));
     });
   }, [isAdmin, doctorId]);
@@ -43,21 +46,29 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       setSaved(d.availability ?? {}); setPending(d.availability ?? {}); setConge(d.congeStatus ?? {});
       setCongeNote(d.congeNote ?? {});
       setSavedUniv(d.univ ?? {}); setPendingUniv(d.univ ?? {});
+      setSavedTp(d.tpWork ?? {}); setPendingTp(d.tpWork ?? {});
     }
   }, [year, month]);
   useEffect(() => { loadAvail(); }, [loadAvail]);
 
   const days = buildMonth(year, month, DEFAULT_WEIGHTS, []);
-  const dirty = JSON.stringify(saved) !== JSON.stringify(pending) || JSON.stringify(savedUniv) !== JSON.stringify(pendingUniv);
+  const dirty = JSON.stringify(saved) !== JSON.stringify(pending)
+    || JSON.stringify(savedUniv) !== JSON.stringify(pendingUniv)
+    || JSON.stringify(savedTp) !== JSON.stringify(pendingTp);
   const stateOf = (name: string, day: number): Availability => pending[name]?.[day] ?? 'dispo';
   const univOf = (name: string, day: number): boolean => !!pendingUniv[name]?.[day];
   // The Univ brush is ALWAYS offered to the admin (even before any doctor has the flag, so the
   // button is discoverable); for doctors it appears once at least one universitaire exists.
   const hasUniversitaire = isAdmin || doctors.some((d) => d.universitaire);
+  const tpOf = (name: string, day: number): boolean => !!pendingTp[name]?.[day];
+  // The TP brush is offered to the admin always (discoverable) and to a doctor only when at least
+  // one part-timer exists — exactly like the Univ brush for universitaire doctors.
+  const hasPartTime = isAdmin || doctors.some((d) => d.partTime);
 
   function cellLook(name: string, day: number): { label: string; cls: string } {
     const st = stateOf(name, day);
     const u = univOf(name, day) && st !== 'conge'; // congé can't also be a fac day
+    const tp = tpOf(name, day) && st !== 'conge'; // congé can't also be a requested working day
     let base: { label: string; cls: string };
     if (st === 'conge') {
       const status = conge[name]?.[day];
@@ -67,9 +78,13 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     } else {
       base = { label: AVAIL_INFO[st].label, cls: AVAIL_INFO[st].cls };
     }
-    // Univ is an ORTHOGONAL marker: keep the garde-preference background, add an indigo ring, and
-    // show 'U' when there's no other label (so "G+ and U" reads as G+ with an indigo ring).
-    if (u) return { label: base.label || 'U', cls: `${base.cls} ring-2 ring-inset ring-indigo-500` };
+    // Orthogonal markers: keep the garde-preference background, add a ring. Label priority when a
+    // cell has no garde label: garde > TP > U. TP = emerald ring; Univ = indigo ring.
+    const rings = `${tp ? ' ring-2 ring-inset ring-emerald-500' : ''}${u ? ' ring-2 ring-inset ring-indigo-500' : ''}`;
+    if (tp || u) {
+      const fallback = tp ? 'TP' : 'U';
+      return { label: base.label || fallback, cls: `${base.cls}${rings}` };
+    }
     return base;
   }
 
@@ -104,6 +119,16 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       });
       return;
     }
+    if (brush === 'tp') {
+      // TP days are only meaningful for part-time doctors — ignore clicks on other rows.
+      if (!doctors.find((d) => d.name === name)?.partTime) return;
+      setPendingTp((p) => {
+        const row = { ...(p[name] ?? {}) };
+        if (row[day]) delete row[day]; else row[day] = true;
+        return { ...p, [name]: row };
+      });
+      return;
+    }
     setPending((p) => {
       const row = { ...(p[name] ?? {}) };
       if (brush === 'dispo') delete row[day]; else row[day] = brush;
@@ -121,17 +146,20 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   async function save() {
     const names = new Set([
       ...Object.keys(saved), ...Object.keys(pending), ...Object.keys(savedUniv), ...Object.keys(pendingUniv),
+      ...Object.keys(savedTp), ...Object.keys(pendingTp),
     ]);
-    const changes: { name: string; day: number; state: Availability; univ: boolean }[] = [];
+    const changes: { name: string; day: number; state: Availability; univ: boolean; tpWork: boolean }[] = [];
     for (const name of names) {
       const a = saved[name] ?? {}; const b = pending[name] ?? {};
       const su = savedUniv[name] ?? {}; const pu = pendingUniv[name] ?? {};
-      const dayset = new Set([...Object.keys(a), ...Object.keys(b), ...Object.keys(su), ...Object.keys(pu)].map(Number));
+      const st = savedTp[name] ?? {}; const pt = pendingTp[name] ?? {};
+      const dayset = new Set([...Object.keys(a), ...Object.keys(b), ...Object.keys(su), ...Object.keys(pu), ...Object.keys(st), ...Object.keys(pt)].map(Number));
       for (const day of dayset) {
         const beforeState = a[day] ?? 'dispo'; const afterState = b[day] ?? 'dispo';
         const beforeUniv = !!su[day]; const afterUniv = !!pu[day];
-        if (beforeState !== afterState || beforeUniv !== afterUniv) {
-          changes.push({ name, day, state: afterState, univ: afterUniv });
+        const beforeTp = !!st[day]; const afterTp = !!pt[day];
+        if (beforeState !== afterState || beforeUniv !== afterUniv || beforeTp !== afterTp) {
+          changes.push({ name, day, state: afterState, univ: afterUniv, tpWork: afterTp });
         }
       }
     }
@@ -139,7 +167,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       const id = doctors.find((d) => d.name === c.name)?.id;
       await fetch('/api/availability', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, month, day: c.day, state: c.state, univ: c.univ, doctorId: isAdmin ? id : undefined }),
+        body: JSON.stringify({ year, month, day: c.day, state: c.state, univ: c.univ, tpWork: c.tpWork, doctorId: isAdmin ? id : undefined }),
       });
     }
     await loadAvail();
@@ -183,6 +211,12 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
           <button onClick={() => setBrush('univ')}
             className={`rounded px-3 py-1.5 text-sm text-indigo-700 ${brush === 'univ' ? 'bg-indigo-100 ring-2 ring-blue-500' : 'bg-white ring-2 ring-inset ring-indigo-400'}`}>
             U — Contrainte université (se combine avec G+/G−)
+          </button>
+        )}
+        {hasPartTime && (
+          <button onClick={() => setBrush('tp')}
+            className={`rounded px-3 py-1.5 text-sm text-emerald-700 ${brush === 'tp' ? 'bg-emerald-100 ring-2 ring-blue-500' : 'bg-white ring-2 ring-inset ring-emerald-400'}`}>
+            TP — Jour souhaité travaillé (temps partiel)
           </button>
         )}
       </div>
@@ -260,6 +294,13 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
         <p className="mt-1 text-sm text-gray-500">
           <span className="rounded px-1 ring-2 ring-inset ring-indigo-500">U</span> Contrainte université : marqueur
           indépendant (anneau indigo) — se cumule avec une préférence de garde (G+/G−) sur le même jour.
+        </p>
+      )}
+      {hasPartTime && (
+        <p className="mt-1 text-sm text-gray-500">
+          <span className="rounded px-1 ring-2 ring-inset ring-emerald-500">TP</span> Jour qu&apos;un
+          médecin à temps partiel souhaite travailler : marqueur indépendant (anneau émeraude). Le
+          moteur force ces jours en travaillés et complète le reste automatiquement selon le ratio.
         </p>
       )}
     </main>
