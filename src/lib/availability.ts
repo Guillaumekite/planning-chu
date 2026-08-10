@@ -12,18 +12,20 @@ export type CongeStatusByName = Record<string, Record<number, string>>;
 export type CongeNoteByName = Record<string, Record<number, string>>;
 /** doctor name → (day → true) for declared university-constraint days. */
 export type UnivByName = Record<string, Record<number, boolean>>;
+/** doctor name → (day → true) for declared part-time preferred working days ("TP"). */
+export type TpWorkByName = Record<string, Record<number, boolean>>;
 
 export async function getAvailability(
   year: number,
   month: number,
   doctorId?: number,
-): Promise<{ availability: AvailabilityByName; congeStatus: CongeStatusByName; congeNote: CongeNoteByName; univ: UnivByName }> {
+): Promise<{ availability: AvailabilityByName; congeStatus: CongeStatusByName; congeNote: CongeNoteByName; univ: UnivByName; tpWork: TpWorkByName }> {
   await ensureSchema();
   const params: unknown[] = [year, month];
   let where = 'a.year = $1 AND a.month = $2';
   if (doctorId != null) { params.push(doctorId); where += ` AND a.doctor_id = $3`; }
-  const rows = await query<{ name: string; day: number; state: AvailState; conge_status: string | null; conge_note: string | null; univ: boolean }>(
-    `SELECT d.name, a.day, a.state, a.conge_status, a.conge_note, a.univ
+  const rows = await query<{ name: string; day: number; state: AvailState; conge_status: string | null; conge_note: string | null; univ: boolean; tp_work: boolean }>(
+    `SELECT d.name, a.day, a.state, a.conge_status, a.conge_note, a.univ, a.tp_work
      FROM availability a JOIN doctors d ON d.id = a.doctor_id
      WHERE ${where}`,
     params,
@@ -32,13 +34,15 @@ export async function getAvailability(
   const congeStatus: CongeStatusByName = {};
   const congeNote: CongeNoteByName = {};
   const univ: UnivByName = {};
+  const tpWork: TpWorkByName = {};
   for (const r of rows) {
     (availability[r.name] ??= {})[r.day] = r.state;
     if (r.conge_status) (congeStatus[r.name] ??= {})[r.day] = r.conge_status;
     if (r.conge_note) (congeNote[r.name] ??= {})[r.day] = r.conge_note;
     if (r.univ) (univ[r.name] ??= {})[r.day] = true;
+    if (r.tp_work) (tpWork[r.name] ??= {})[r.day] = true;
   }
-  return { availability, congeStatus, congeNote, univ };
+  return { availability, congeStatus, congeNote, univ, tpWork };
 }
 
 export type { CongeRun, CongeStatus, YMD } from './congeRuns';
@@ -111,20 +115,23 @@ export async function setCell(
   day: number,
   state: AvailState,
   univ = false,
+  tpWork = false,
 ): Promise<void> {
   await ensureSchema();
   const effectiveUniv = state === 'conge' ? false : univ;
-  if (state === 'dispo' && !effectiveUniv) {
+  // A congé day can't also be a requested working day.
+  const effectiveTp = state === 'conge' ? false : tpWork;
+  if (state === 'dispo' && !effectiveUniv && !effectiveTp) {
     await query(`DELETE FROM availability WHERE doctor_id = $1 AND year = $2 AND month = $3 AND day = $4`,
       [doctorId, year, month, day]);
     return;
   }
   const congeStatus = state === 'conge' ? 'pending' : null;
   await query(
-    `INSERT INTO availability (doctor_id, year, month, day, state, conge_status, univ)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO availability (doctor_id, year, month, day, state, conge_status, univ, tp_work)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (doctor_id, year, month, day)
-     DO UPDATE SET state = EXCLUDED.state, conge_status = EXCLUDED.conge_status, univ = EXCLUDED.univ`,
-    [doctorId, year, month, day, state, congeStatus, effectiveUniv],
+     DO UPDATE SET state = EXCLUDED.state, conge_status = EXCLUDED.conge_status, univ = EXCLUDED.univ, tp_work = EXCLUDED.tp_work`,
+    [doctorId, year, month, day, state, congeStatus, effectiveUniv, effectiveTp],
   );
 }
