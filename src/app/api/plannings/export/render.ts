@@ -12,6 +12,7 @@ type Equity = {
 
 // Gris = week-end / jour férié / congé-absence ; rouge = gardes G1 & G2 (inspiré du planning papier).
 const GREY_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } } as const;
+const RED_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4B0B0' } } as const;
 const RED = 'FFCC0000';
 const ABSENT = new Set(['CA', 'ABS']); // congé / absence → grisé
 
@@ -126,23 +127,39 @@ export async function toXlsx(planning: PlanningRow, doctors: string[], year: num
     });
   }
 
+  // Bloc compteur des postes, empilé sous la grille (mêmes colonnes-jours).
+  const pc = computePostCounter(planning.grid, planning.days);
+  sheet.addRow([]); // ligne vide
+  const counterTitle = sheet.addRow(['Compteur des postes']);
+  counterTitle.getCell(1).font = { bold: true };
+  for (const post of POST_ROWS) {
+    const row = sheet.addRow([post, ...planning.days.map((d) => pc.counts[d.day][post] ?? 0)]);
+    row.getCell(1).font = { bold: true };
+    planning.days.forEach((d, i) => {
+      const bad = pc.flagged[d.day].has(post) || ((post === 'CS1' || post === 'CS2') && pc.flagged[d.day].has('CS'));
+      if (bad) row.getCell(i + 2).fill = RED_FILL;
+      else if (d.isWeekend || d.isHoliday) row.getCell(i + 2).fill = GREY_FILL;
+    });
+  }
+  const workRow = sheet.addRow(['Travaillants', ...planning.days.map((d) => pc.working[d.day])]);
+  workRow.getCell(1).font = { bold: true };
+  const ctrlRow = sheet.addRow(['Contrôle', ...planning.days.map((d) => (pc.flagged[d.day].size === 0 ? '✓' : '✗'))]);
+  ctrlRow.getCell(1).font = { bold: true };
+  planning.days.forEach((d, i) => {
+    if (pc.flagged[d.day].size > 0) ctrlRow.getCell(i + 2).fill = RED_FILL;
+  });
+  for (const d of planning.days) {
+    if (pc.flagged[d.day].size > 0) sheet.addRow([`Jour ${d.day} : ${pc.reason[d.day]}`]);
+  }
+
+  // Bloc équité, empilé sous le compteur.
   const equity = planning.garde_equity as Equity | null;
   if (equity) {
-    const eqSheet = wb.addWorksheet('Équité');
-    eqSheet.columns = [
-      { header: 'Médecin', key: 'doctor', width: 20 },
-      { header: 'Gardes', key: 'count', width: 10 },
-      { header: 'Week-ends', key: 'weekend', width: 12 },
-      { header: 'Jours pénibles', key: 'heavy', width: 14 },
-    ];
-    eqSheet.getRow(1).font = { bold: true };
+    sheet.addRow([]); // ligne vide
+    const eqTitle = sheet.addRow(['Équité', 'Gardes', 'Week-ends', 'Jours pénibles']);
+    eqTitle.font = { bold: true };
     for (const doc of doctors) {
-      eqSheet.addRow({
-        doctor: doc,
-        count: equity.count?.[doc] ?? 0,
-        weekend: equity.weekendCount?.[doc] ?? 0,
-        heavy: equity.heavyCount?.[doc] ?? 0,
-      });
+      sheet.addRow([doc, equity.count?.[doc] ?? 0, equity.weekendCount?.[doc] ?? 0, equity.heavyCount?.[doc] ?? 0]);
     }
   }
 
