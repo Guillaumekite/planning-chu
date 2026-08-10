@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { solvePlanning } from '@/engine/planning';
 import { getLatestPublishedBefore } from '@/lib/plannings';
+import { carryGardeLastDay } from '@/lib/carryRs';
 
 // The GLPK solver is native (WASM) → this route must run on the Node.js runtime.
 export const runtime = 'nodejs';
@@ -70,6 +71,10 @@ export async function POST(req: Request) {
       weekendCount?: Record<string, number>;
     };
 
+    // Report des RS au 1er : garde tenue le dernier jour du mois JUSTE précédent (publié) →
+    // RS le 1er de ce mois + blocage garde le 1/2. Actif à partir de juillet 2026 seulement.
+    const carriedRS = carryGardeLastDay(input.year, input.month, prev, input.doctors);
+
     const result = await solvePlanning({
       year: input.year,
       month: input.month,
@@ -83,6 +88,7 @@ export async function POST(req: Request) {
       carryCount: prevEq.count,
       carryHeavy: prevEq.heavyCount,
       carryWeekend: prevEq.weekendCount,
+      carryGardeLastDay: carriedRS,
     });
     return NextResponse.json(result);
   } catch (e) {
