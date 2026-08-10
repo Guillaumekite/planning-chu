@@ -5,6 +5,7 @@ import Link from 'next/link';
 import AdminNav from '@/components/AdminNav';
 import { MONTHS_FR } from '@/lib/store';
 import PlanningGrid, { type GridDay } from '@/components/PlanningGrid';
+import PostCounterTable from '@/components/PostCounterTable';
 import { weekdayOf, daysInMonth } from '@/engine/calendar';
 
 type Doctor = {
@@ -320,11 +321,13 @@ export default function AdminClient() {
               </div>
             )}
             <PlanningGrid days={draft.days} grid={draft.grid} doctors={active.map((d) => d.name)} />
+            <PostCounterTable days={draft.days} grid={draft.grid} />
             <EquityTable equity={draft.gardeEquity} doctors={active.map((d) => d.name)} />
           </div>
         ) : publishedPlanning ? (
           <div className="space-y-6">
             <PlanningGrid days={publishedPlanning.days} grid={publishedPlanning.grid} doctors={publishedDoctors(publishedPlanning)} />
+            <PostCounterTable days={publishedPlanning.days} grid={publishedPlanning.grid} />
             {publishedPlanning.garde_equity && <EquityTable equity={publishedPlanning.garde_equity} doctors={publishedDoctors(publishedPlanning)} />}
           </div>
         ) : (
