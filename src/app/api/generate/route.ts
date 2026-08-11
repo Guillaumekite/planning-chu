@@ -32,6 +32,7 @@ const BodySchema = z.object({
   acupuncture: z.boolean().optional(),
   wishes: z.record(z.string(), z.array(z.number().int().min(1).max(31))).optional(),
   univConstraints: z.record(z.string(), z.array(z.number().int().min(1).max(31))).optional(),
+  tpPreferred: z.record(z.string(), z.array(z.number().int().min(1).max(31))).optional(),
 });
 
 export async function POST(req: Request) {
@@ -85,6 +86,7 @@ export async function POST(req: Request) {
       profiles: input.profiles,
       acupuncture: input.acupuncture,
       univConstraints: input.univConstraints,
+      tpPreferred: input.tpPreferred,
       carryCount: prevEq.count,
       carryHeavy: prevEq.heavyCount,
       carryWeekend: prevEq.weekendCount,

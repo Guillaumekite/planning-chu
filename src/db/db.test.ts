@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { query, queryOne } from './client';
 import { ensureSchema } from './schema';
+import { setCell } from '@/lib/availability';
 
 // Uses the embedded PGlite database (no external Postgres needed).
 describe('database layer (PGlite)', () => {
@@ -50,5 +51,31 @@ describe('database layer (PGlite)', () => {
       [doc!.id],
     );
     expect(av).toEqual({ state: 'conge', conge_status: 'pending' });
+  });
+
+  it('round-trips the tp_work marker on availability', async () => {
+    const doc = await queryOne<{ id: number }>(`SELECT id FROM doctors WHERE name = 'FABRE'`);
+    await query(
+      `INSERT INTO availability (doctor_id, year, month, day, state, tp_work)
+       VALUES ($1, 2026, 9, 12, 'dispo', true)
+       ON CONFLICT (doctor_id, year, month, day)
+       DO UPDATE SET state = EXCLUDED.state, tp_work = EXCLUDED.tp_work`,
+      [doc!.id],
+    );
+    const av = await queryOne<{ state: string; tp_work: boolean }>(
+      `SELECT state, tp_work FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 9 AND day = 12`,
+      [doc!.id],
+    );
+    expect(av).toEqual({ state: 'dispo', tp_work: true });
+  });
+
+  it('setCell : G+ (souhait_garde) est exclusif du marqueur TP off — tp_work forcé à false', async () => {
+    const doc = await queryOne<{ id: number }>(`SELECT id FROM doctors WHERE name = 'FABRE'`);
+    await setCell(doc!.id, 2026, 9, 14, 'souhait_garde', false, true); // tpWork demandé mais G+ → refusé
+    const av = await queryOne<{ state: string; tp_work: boolean }>(
+      `SELECT state, tp_work FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 9 AND day = 14`,
+      [doc!.id],
+    );
+    expect(av).toEqual({ state: 'souhait_garde', tp_work: false });
   });
 });

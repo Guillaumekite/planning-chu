@@ -84,6 +84,14 @@ export interface PlanningInput {
    * inter-mois : garde le dernier jour → RS le 1er → 2 encore interdit → 1re garde possible le 3).
    * Renseigné par la route uniquement à partir de juillet 2026 et si le mois précédent est contigu. */
   carryGardeLastDay?: DoctorId[];
+  /**
+   * Par médecin à temps partiel : jours de semaine (1-based) DÉCLARÉS comme NON souhaités
+   * travaillés ("TP" = jour off préféré). Ces jours sont forcés off ; le reste du quota d'absence
+   * (1 − ratio) est complété automatiquement. Un G+ le même jour gagne (jour travaillé). Si plus
+   * de jours off sont déclarés que le quota, seuls `quota` sont honorés (répartis) et un
+   * avertissement est émis dans `warnings`.
+   */
+  tpPreferred?: Record<DoctorId, number[]>;
 }
 
 export type PlanningResult =
@@ -122,6 +130,8 @@ function computeTpDays(
   days: CalendarDay[],
   isAvailWeekday: (day: number) => boolean,
   ratio: number,
+  forcedOff: Set<number>,
+  forcedWork: Set<number>,
 ): Set<number> {
   const byWeek = new Map<number, number[]>();
   for (const cd of days) {
@@ -137,8 +147,16 @@ function computeTpDays(
     credit += ratio * group.length;
     let work = Math.floor(credit + 0.5);
     work = Math.max(0, Math.min(group.length, work));
-    credit -= work;
-    const working = new Set(pickEven(group, work));
+    // Declared OFF days (forcedOff) are NEVER worked; G+ days (forcedWork) are ALWAYS worked.
+    // The rest of the weekly work target is auto-filled (evenly spread). Any weekly imbalance
+    // (a week loaded with off wishes or G+) drifts the credit → compensated on later weeks,
+    // keeping the month close to the ratio.
+    const working = new Set(group.filter((d) => forcedWork.has(d)));
+    if (working.size < work) {
+      const remaining = group.filter((d) => !working.has(d) && !forcedOff.has(d));
+      for (const d of pickEven(remaining, work - working.size)) working.add(d);
+    }
+    credit -= working.size;
     for (const day of group) if (!working.has(day)) tp.add(day);
   }
   return tp;
@@ -161,12 +179,37 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   for (const doc of doctors) douleurPoids[doc] = input.profiles?.[doc]?.douleurPoids ?? 0;
 
   // Part-time off days (TP): part-timers don't work every day — ~fte of their present weekdays,
-  // in a 3/2-style weekly alternation. Those off days get no post and look like any day off.
+  // in a 3/2-style weekly alternation. Days DECLARED "TP" (input.tpPreferred) are days the doctor
+  // does NOT want to work: they are forced off, and the remaining off quota is auto-filled. A G+
+  // (souhait_garde) day stays forced WORKING (a garde wish implies presence) — the UI forbids
+  // TP+G+ on the same day, and if stale data still carries both, G+ wins. When more off days are
+  // declared than the ratio allows, only the quota is honored (evenly spread) and the admin is
+  // warned. Off days get no post and look like any day off.
+  const tpPreferred = input.tpPreferred ?? {};
+  const tpWarnings: string[] = [];
   const tpDays: Record<DoctorId, Set<number>> = {};
   for (const doc of doctors) {
-    tpDays[doc] = fte[doc] < 1
-      ? computeTpDays(days, (day) => PRESENT(avail(input, doc, day)), fte[doc])
-      : new Set<number>();
+    if (fte[doc] >= 1) { tpDays[doc] = new Set(); continue; }
+    const pref = new Set(tpPreferred[doc] ?? []);
+    const declaredOff: number[] = [];
+    const forcedWork = new Set<number>();
+    let availWeekdays = 0;
+    for (const cd of days) {
+      if (cd.isWeekend || cd.isHoliday || !PRESENT(avail(input, doc, cd.day))) continue;
+      availWeekdays++;
+      if (avail(input, doc, cd.day) === 'souhait_garde') forcedWork.add(cd.day); // G+ ⇒ travaillé
+      else if (pref.has(cd.day)) declaredOff.push(cd.day);
+    }
+    const offQuota = availWeekdays - Math.round(fte[doc] * availWeekdays);
+    let forcedOff = new Set(declaredOff);
+    if (declaredOff.length > offQuota) {
+      forcedOff = new Set(pickEven(declaredOff, offQuota));
+      tpWarnings.push(
+        `${doc} (TP ${Math.round(fte[doc] * 100)} %) : ${declaredOff.length} jours off souhaités ` +
+          `pour un quota d'absence de ${offQuota} — seuls ${forcedOff.size} sont honorés (répartis).`,
+      );
+    }
+    tpDays[doc] = computeTpDays(days, (day) => PRESENT(avail(input, doc, day)), fte[doc], forcedOff, forcedWork);
   }
 
   // Wishes (souhait_garde) feed the garde optimiser's soft preference.
@@ -237,6 +280,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const gardes = await solveGardes(gardeInput);
   if (gardes.status === 'infeasible') return gardes;
   const warnings = [...gardes.warnings];
+  warnings.push(...tpWarnings);
 
   const gardeByDay: Record<number, { G1?: DoctorId; G2?: DoctorId }> = {};
   for (const a of gardes.assignments) (gardeByDay[a.day] ??= {})[a.role] = a.doctorId;
