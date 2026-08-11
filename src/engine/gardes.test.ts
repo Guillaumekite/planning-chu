@@ -297,3 +297,23 @@ describe('computeGardeTargets — carry du mois précédent en ratio, borné ±1
     expect(Math.abs(t.neuf - 20)).toBeLessThanOrEqual(0.01);
   });
 });
+
+describe('solveGardes — cap souple 6 et équité portée par le MILP (spec §1.3)', () => {
+  it('personne au-dessus de 6 gardes quand l\'effectif suffit (11 médecins, 31 jours)', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(11) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    for (const c of Object.values(res.equity.count)) expect(c).toBeLessThanOrEqual(6);
+    const cs = Object.values(res.equity.count);
+    expect(Math.max(...cs) - Math.min(...cs)).toBeLessThanOrEqual(1); // équité dès le solveur
+    expect(res.warnings.some((w) => w.includes('montent à 7'))).toBe(false);
+  });
+
+  it('monte à 7 UNIQUEMENT si nécessaire, avec avertissement (9 médecins, 31 jours = 62 gardes)', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(9) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(Math.max(...Object.values(res.equity.count))).toBe(7);
+    expect(res.warnings.some((w) => w.includes('montent à 7'))).toBe(true);
+  });
+});

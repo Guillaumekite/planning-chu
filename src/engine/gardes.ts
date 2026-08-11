@@ -27,6 +27,10 @@ const FR_WEEKDAY = ['lun', 'mar', 'mer', 'jeu', 'ven', 'sam', 'dim'];
  * wished (G+) more than 7 days, in which case their cap is their wish count. */
 const MAX_GARDES_PER_MONTH = 7;
 
+/** Soft monthly cap (spec §1.3): 6 gardes max par défaut. La 7e n'est accordée que par
+ * l'échelle de relaxation (effectif insuffisant, avec avertissement) ou par G+. */
+const TARGET_MAX_GARDES = 6;
+
 /** Weekend (Fri/Sat/Sun) gardes per doctor per month: at most 2 — raised only when the roster
  * cannot cover all weekend slots at 2 each (adaptive, with an admin warning). G+ wishes do NOT
  * override this cap. */
@@ -170,9 +174,15 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
       );
     }
   }
-  // Monthly cap: 7, lifted to the doctor's kept-wish count when they asked for more.
-  const cap: Record<DoctorId, number> = {};
-  for (const doc of doctors) cap[doc] = Math.max(MAX_GARDES_PER_MONTH, keptWishes[doc]?.length ?? 0);
+  // Monthly cap per ladder level: 6 by default, 7 when the roster can't cover at 6 — always
+  // lifted to the doctor's kept-wish count when they asked for more (G+ only path beyond 7).
+  const capFor = (base: number): Record<DoctorId, number> => {
+    const c: Record<DoctorId, number> = {};
+    for (const doc of doctors) c[doc] = Math.max(base, keptWishes[doc]?.length ?? 0);
+    return c;
+  };
+  const capHard = capFor(MAX_GARDES_PER_MONTH); // grand max (hors G+) — sert aussi au pré-check
+  const cap = capHard;
 
   // Pre-check: each day needs ≥ 2 eligible doctors, else provably infeasible.
   for (const cd of days) {
@@ -207,18 +217,22 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
 
   // ---- Step 1: feasibility MILP (fast). Relaxation ladder if over-constrained: first raise the
   // weekend cap a notch, then drop the G+ forcing, then both — each step adds an admin warning.
-  const attempts: { forced: Set<string>; weCap: number; note?: string }[] = [
-    { forced, weCap },
-    { forced, weCap: weCap + 1, note: `Cap week-end porté à ${weCap + 1} (impossible à ${weCap} avec les contraintes du mois).` },
-    { forced: new Set<string>(), weCap, note: `Impossible d'honorer tous les G+ en même temps (repos / effectif / cap week-end) — planning généré sans les garantir.` },
-    { forced: new Set<string>(), weCap: weCap + 2, note: `Ni les G+ ni le cap week-end de ${weCap} n'étaient tenables ensemble — G+ non garantis et cap week-end porté à ${weCap + 2}.` },
-    { forced: new Set<string>(), weCap: 31, note: `Cap de gardes de week-end abandonné ce mois-ci (mois trop contraint) — vérifie les indisponibilités.` },
+  const attempts: { cap: Record<DoctorId, number>; forced: Set<string>; weCap: number; note?: string }[] = [
+    { cap: capFor(TARGET_MAX_GARDES), forced, weCap },
+    { cap: capHard, forced, weCap, note: `Effectif insuffisant pour tenir ${TARGET_MAX_GARDES} gardes/mois maximum : certains médecins montent à ${MAX_GARDES_PER_MONTH} ce mois-ci.` },
+    { cap: capHard, forced, weCap: weCap + 1, note: `Cap week-end porté à ${weCap + 1} (impossible à ${weCap} avec les contraintes du mois).` },
+    { cap: capHard, forced: new Set<string>(), weCap, note: `Impossible d'honorer tous les G+ en même temps (repos / effectif / cap week-end) — planning généré sans les garantir.` },
+    { cap: capHard, forced: new Set<string>(), weCap: weCap + 2, note: `Ni les G+ ni le cap week-end de ${weCap} n'étaient tenables ensemble — G+ non garantis et cap week-end porté à ${weCap + 2}.` },
+    { cap: capHard, forced: new Set<string>(), weCap: 31, note: `Cap de gardes de week-end abandonné ce mois-ci (mois trop contraint) — vérifie les indisponibilités.` },
   ];
+  // Cibles mensuelles (part proportionnelle + carry en ratio borné ±1) — consommées par le
+  // MILP (objectif d'équité) puis par la recherche locale.
+  const targets = computeGardeTargets(doctors, 2 * days.length, input.fte ?? {}, carryCount, input.carryWorked ?? {});
   let plan: WishPlan = { forced, cap, weCap };
   let feasible: Record<string, boolean> | null = null;
   for (const attempt of attempts) {
-    plan = { forced: attempt.forced, cap, weCap: attempt.weCap };
-    feasible = await solveFeasibility(input, days, weights, plan);
+    plan = { forced: attempt.forced, cap: attempt.cap, weCap: attempt.weCap };
+    feasible = await solveFeasibility(input, days, weights, plan, targets);
     if (feasible) {
       if (attempt.note) warnings.push(attempt.note);
       break;
@@ -250,7 +264,6 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   const assigned: DoctorId[][] = days.map((cd) =>
     doctors.filter((doc) => !isBlocked(cd.day, doc) && feasible[gv(cd.day, doc)]),
   );
-  const targets = computeGardeTargets(doctors, 2 * days.length, input.fte ?? {}, carryCount, input.carryWorked ?? {});
   polishEquity(days, doctors, assigned, blocked, targets, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2);
 
   // ---- Build result ----
@@ -465,12 +478,15 @@ function assignRoles(pairs: DoctorId[][], forceG2: Set<DoctorId>): DoctorId[] {
   return g1arr;
 }
 
-/** Solve the feasibility MILP. Returns a map of chosen g-vars, or null if infeasible. */
+/** Solve the equity MILP: hard constraints + minimisation des écarts à la cible par médecin
+ * (spec §1.3 — l'équité est portée par le solveur, plus seulement par la recherche locale).
+ * Returns a map of chosen g-vars, or null if infeasible. */
 async function solveFeasibility(
   input: GardeInput,
   days: CalendarDay[],
   weights: GardeWeights,
   plan: WishPlan,
+  targets: Record<DoctorId, number>,
 ): Promise<Record<string, boolean> | null> {
   const glpk = await getGlpk();
   const doctors = input.doctors;
@@ -522,10 +538,18 @@ async function solveFeasibility(
   for (const cd of days) subjectTo.push({ name: `day_${cd.day}`, vars: dayVars[cd.day], bnds: { type: glpk.GLP_FX, lb: 2, ub: 2 } });
   for (const doc of doctors) subjectTo.push({ name: `wedef_${doc}`, vars: wedefVars[doc], bnds: { type: glpk.GLP_LO, lb: 1, ub: 0 } });
   for (const row of rsRows) subjectTo.push({ name: row.name, vars: row.vars, bnds: { type: glpk.GLP_UP, lb: 0, ub: 1 } });
-  // Monthly cap per doctor (≤ 7 gardes, or the wish count when higher).
+  // Monthly cap per doctor (palier courant : 6 ou 7, ou le nombre de G+ si plus haut).
   for (const doc of doctors) {
     if (docVars[doc].length > 0) {
       subjectTo.push({ name: `cap_${doc}`, vars: docVars[doc], bnds: { type: glpk.GLP_UP, lb: 0, ub: plan.cap[doc] ?? MAX_GARDES_PER_MONTH } });
+      // Équité : Σ gardes + devm − devp = cible arrondie ; devp/devm (≥ 0) pénalisées dans
+      // l'objectif ⇒ le solveur colle chaque médecin à sa cible autant que faisable.
+      subjectTo.push({
+        name: `eq_${doc}`,
+        vars: [...docVars[doc], { name: `devm_${doc}`, coef: 1 }, { name: `devp_${doc}`, coef: -1 }],
+        bnds: { type: glpk.GLP_FX, lb: Math.round(targets[doc] ?? 0), ub: Math.round(targets[doc] ?? 0) },
+      });
+      objVars.push({ name: `devm_${doc}`, coef: 2 }, { name: `devp_${doc}`, coef: 2 });
     }
     // Weekend cap (Fri/Sat/Sun): ≤ plan.weCap per doctor per month.
     if (docWeVars[doc].length > 0 && plan.weCap < 31) {
