@@ -104,10 +104,12 @@ export async function setCongeStatus(
 
 /**
  * Upsert one day for one doctor. `state` is the garde/congé preference; `univ` is the orthogonal
- * university-constraint marker; `tpWork` is the part-time preferred-working-day marker. The row is
+ * university-constraint marker; `tpWork` is the part-time preferred-OFF-day marker ("TP" : jour
+ * que le temps partiel ne souhaite PAS travailler — the column name is historical). The row is
  * cleared only when it carries NO information at all (state = 'dispo' AND not univ AND not tpWork)
- * — so a "at the fac, no garde preference" day survives. A congé day can never be a univ or tpWork day
- * (absent ≠ constraint), so both are forced off then.
+ * — so a "at the fac, no garde preference" day survives. A congé day can never be a univ or TP day
+ * (absent ≠ constraint), and a G+ (souhait_garde) day can never be a TP off day (wishing a garde
+ * implies working), so the marker is forced off in both cases.
  */
 export async function setCell(
   doctorId: number,
@@ -120,8 +122,8 @@ export async function setCell(
 ): Promise<void> {
   await ensureSchema();
   const effectiveUniv = state === 'conge' ? false : univ;
-  // A congé day can't also be a requested working day.
-  const effectiveTp = state === 'conge' ? false : tpWork;
+  // Congé (absent) and G+ (wants a garde ⇒ works) both exclude the TP off marker.
+  const effectiveTp = state === 'conge' || state === 'souhait_garde' ? false : tpWork;
   if (state === 'dispo' && !effectiveUniv && !effectiveTp) {
     await query(`DELETE FROM availability WHERE doctor_id = $1 AND year = $2 AND month = $3 AND day = $4`,
       [doctorId, year, month, day]);

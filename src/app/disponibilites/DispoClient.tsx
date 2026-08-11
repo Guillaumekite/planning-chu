@@ -120,14 +120,24 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       return;
     }
     if (brush === 'tp') {
-      // TP days are only meaningful for part-time doctors — ignore clicks on other rows.
+      // TP (jour off souhaité) days are only meaningful for part-time doctors — ignore other rows.
       if (!doctors.find((d) => d.name === name)?.partTime) return;
+      // Incompatible with G+ : wishing a garde implies working that day, so no off marker on it.
+      if (stateOf(name, day) === 'souhait_garde') return;
       setPendingTp((p) => {
         const row = { ...(p[name] ?? {}) };
         if (row[day]) delete row[day]; else row[day] = true;
         return { ...p, [name]: row };
       });
       return;
+    }
+    // Painting G+ over a TP off-marker removes the marker (the two are mutually exclusive).
+    if (brush === 'souhait_garde' && pendingTp[name]?.[day]) {
+      setPendingTp((p) => {
+        const row = { ...(p[name] ?? {}) };
+        delete row[day];
+        return { ...p, [name]: row };
+      });
     }
     setPending((p) => {
       const row = { ...(p[name] ?? {}) };
@@ -216,7 +226,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
         {hasPartTime && (
           <button onClick={() => setBrush('tp')}
             className={`rounded px-3 py-1.5 text-sm text-emerald-700 ${brush === 'tp' ? 'bg-emerald-100 ring-2 ring-blue-500' : 'bg-white ring-2 ring-inset ring-emerald-400'}`}>
-            TP — Jour souhaité travaillé (temps partiel)
+            TP — Jour non travaillé souhaité (temps partiel)
           </button>
         )}
       </div>
@@ -299,8 +309,10 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       {hasPartTime && (
         <p className="mt-1 text-sm text-gray-500">
           <span className="rounded px-1 ring-2 ring-inset ring-emerald-500">TP</span> Jour qu&apos;un
-          médecin à temps partiel souhaite travailler : marqueur indépendant (anneau émeraude). Le
-          moteur force ces jours en travaillés et complète le reste automatiquement selon le ratio.
+          médecin à temps partiel ne souhaite <b>pas</b> travailler : marqueur indépendant (anneau
+          émeraude). Le moteur garantit ces jours off et complète les autres jours off selon le
+          ratio ; s&apos;il y en a plus que le quota, seul le quota est honoré (avertissement à la
+          génération). Incompatible avec G+ (souhaiter une garde implique de travailler ce jour).
         </p>
       )}
     </main>

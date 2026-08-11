@@ -85,10 +85,11 @@ export interface PlanningInput {
    * Renseigné par la route uniquement à partir de juillet 2026 et si le mois précédent est contigu. */
   carryGardeLastDay?: DoctorId[];
   /**
-   * Par médecin à temps partiel : jours de semaine (1-based) DÉCLARÉS comme souhaités
-   * travaillés ("TP"). Ces jours (union avec les jours souhait_garde) sont TOUJOURS travaillés ;
-   * le reste du quota (ratio) est complété automatiquement. Un dépassement du quota est honoré
-   * et signalé dans `warnings`.
+   * Par médecin à temps partiel : jours de semaine (1-based) DÉCLARÉS comme NON souhaités
+   * travaillés ("TP" = jour off préféré). Ces jours sont forcés off ; le reste du quota d'absence
+   * (1 − ratio) est complété automatiquement. Un G+ le même jour gagne (jour travaillé). Si plus
+   * de jours off sont déclarés que le quota, seuls `quota` sont honorés (répartis) et un
+   * avertissement est émis dans `warnings`.
    */
   tpPreferred?: Record<DoctorId, number[]>;
 }
@@ -129,7 +130,8 @@ function computeTpDays(
   days: CalendarDay[],
   isAvailWeekday: (day: number) => boolean,
   ratio: number,
-  forced: Set<number>,
+  forcedOff: Set<number>,
+  forcedWork: Set<number>,
 ): Set<number> {
   const byWeek = new Map<number, number[]>();
   for (const cd of days) {
@@ -145,12 +147,13 @@ function computeTpDays(
     credit += ratio * group.length;
     let work = Math.floor(credit + 0.5);
     work = Math.max(0, Math.min(group.length, work));
-    // Forced working days (declared "TP" or souhait_garde) are ALWAYS worked; auto-fill the rest
-    // up to the weekly target. Honoring more forced days than the target this week pushes the
-    // credit negative → later weeks fill fewer days, keeping the month close to the ratio.
-    const working = new Set(group.filter((d) => forced.has(d)));
+    // Declared OFF days (forcedOff) are NEVER worked; G+ days (forcedWork) are ALWAYS worked.
+    // The rest of the weekly work target is auto-filled (evenly spread). Any weekly imbalance
+    // (a week loaded with off wishes or G+) drifts the credit → compensated on later weeks,
+    // keeping the month close to the ratio.
+    const working = new Set(group.filter((d) => forcedWork.has(d)));
     if (working.size < work) {
-      const remaining = group.filter((d) => !working.has(d));
+      const remaining = group.filter((d) => !working.has(d) && !forcedOff.has(d));
       for (const d of pickEven(remaining, work - working.size)) working.add(d);
     }
     credit -= working.size;
@@ -176,30 +179,37 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   for (const doc of doctors) douleurPoids[doc] = input.profiles?.[doc]?.douleurPoids ?? 0;
 
   // Part-time off days (TP): part-timers don't work every day — ~fte of their present weekdays,
-  // in a 3/2-style weekly alternation. Days DECLARED "TP" (input.tpPreferred) or wished for a
-  // garde (souhait_garde) are forced working; the rest of the quota is auto-filled. Off days get
-  // no post and look like any day off.
+  // in a 3/2-style weekly alternation. Days DECLARED "TP" (input.tpPreferred) are days the doctor
+  // does NOT want to work: they are forced off, and the remaining off quota is auto-filled. A G+
+  // (souhait_garde) day stays forced WORKING (a garde wish implies presence) — the UI forbids
+  // TP+G+ on the same day, and if stale data still carries both, G+ wins. When more off days are
+  // declared than the ratio allows, only the quota is honored (evenly spread) and the admin is
+  // warned. Off days get no post and look like any day off.
   const tpPreferred = input.tpPreferred ?? {};
   const tpWarnings: string[] = [];
   const tpDays: Record<DoctorId, Set<number>> = {};
   for (const doc of doctors) {
     if (fte[doc] >= 1) { tpDays[doc] = new Set(); continue; }
     const pref = new Set(tpPreferred[doc] ?? []);
-    const forced = new Set<number>();
+    const declaredOff: number[] = [];
+    const forcedWork = new Set<number>();
     let availWeekdays = 0;
     for (const cd of days) {
       if (cd.isWeekend || cd.isHoliday || !PRESENT(avail(input, doc, cd.day))) continue;
       availWeekdays++;
-      if (pref.has(cd.day) || avail(input, doc, cd.day) === 'souhait_garde') forced.add(cd.day);
+      if (avail(input, doc, cd.day) === 'souhait_garde') forcedWork.add(cd.day); // G+ ⇒ travaillé
+      else if (pref.has(cd.day)) declaredOff.push(cd.day);
     }
-    tpDays[doc] = computeTpDays(days, (day) => PRESENT(avail(input, doc, day)), fte[doc], forced);
-    const target = Math.round(fte[doc] * availWeekdays);
-    if (forced.size > target) {
+    const offQuota = availWeekdays - Math.round(fte[doc] * availWeekdays);
+    let forcedOff = new Set(declaredOff);
+    if (declaredOff.length > offQuota) {
+      forcedOff = new Set(pickEven(declaredOff, offQuota));
       tpWarnings.push(
-        `${doc} (TP ${Math.round(fte[doc] * 100)} %) : ${forced.size} jours souhaités travaillés ` +
-          `au-delà de son quota (~${target}) — tous honorés.`,
+        `${doc} (TP ${Math.round(fte[doc] * 100)} %) : ${declaredOff.length} jours off souhaités ` +
+          `pour un quota d'absence de ${offQuota} — seuls ${forcedOff.size} sont honorés (répartis).`,
       );
     }
+    tpDays[doc] = computeTpDays(days, (day) => PRESENT(avail(input, doc, day)), fte[doc], forcedOff, forcedWork);
   }
 
   // Wishes (souhait_garde) feed the garde optimiser's soft preference.

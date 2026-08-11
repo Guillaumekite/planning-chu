@@ -154,3 +154,44 @@ Dans `generate()`, construire `tpPreferred` depuis `availData.tpWork`
 - Pas de modification de l'affichage du **planning généré** (déjà correct : un
   jour forcé travaillé devient présent et reçoit un poste normal).
 - Pas de gestion des week-ends dans le mécanisme TP (inchangé).
+
+---
+
+## Révision 2026-08-11 — INVERSION de sémantique : TP = jours OFF préférés
+
+La sémantique initiale était erronée. Le marqueur **TP désigne les jours que le
+médecin à temps partiel ne souhaite PAS travailler** (jours off préférés), pas
+l'inverse. Si moins de jours off sont sélectionnés que le quota d'absence
+(1 − ratio), l'algorithme complète automatiquement les jours off manquants.
+
+### Décisions (cadrées avec l'utilisateur)
+
+1. **Dépassement** : si PLUS de jours off sont déclarés que le quota d'absence,
+   on en honore le maximum (sous-ensemble réparti via `pickEven`), l'excédent
+   est ignoré et l'admin est averti (« X jours off souhaités pour un quota de
+   Q — seuls Q sont honorés »).
+2. **TP et G+ incompatibles le même jour** : l'UI l'empêche (brush TP inopérant
+   sur un jour G+ ; peindre G+ efface le marqueur TP du jour) et `setCell` le
+   verrouille côté serveur (`souhait_garde` force `tp_work = false`, comme le
+   congé). Défensivement, le moteur fait gagner le G+ si des données anciennes
+   portent encore les deux.
+3. **Données existantes conservées** : la colonne garde son nom `tp_work`
+   (historique) ; les jours déjà saisis sont réinterprétés comme jours off.
+
+### Ce qui reste inchangé
+
+- Un G+ reste un jour forcé travaillé (l'auto-placement des jours off ne tombe
+  jamais sur un G+).
+- G− reste combinable avec TP (si le jour tombe off, le G− est sans objet).
+- Congé exclusif du marqueur TP ; portée jours de semaine ; visibilité du brush
+  (admin + médecins TP) ; sans marqueur, répartition automatique inchangée.
+
+### Implémentation
+
+- `computeTpDays(days, isAvail, ratio, forcedOff, forcedWork)` : les jours
+  `forcedOff` ne sont jamais travaillés, les `forcedWork` (G+) toujours ; le
+  reste de la cible hebdomadaire est complété (réparti), le crédit compense les
+  écarts entre semaines.
+- Plafonnement mensuel en amont : `offQuota = joursDispo − round(ratio × joursDispo)` ;
+  au-delà, sous-ensemble `pickEven` + avertissement.
+- UI : libellés inversés (« Jour non travaillé souhaité (temps partiel) »).
