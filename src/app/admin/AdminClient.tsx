@@ -131,7 +131,7 @@ export default function AdminClient() {
       const uDays = Object.entries(perDay).filter(([, v]) => v).map(([d]) => Number(d));
       if (uDays.length) univConstraints[name] = uDays;
     }
-    // Declared part-time preferred working days per doctor (from the orthogonal `tp_work` layer).
+    // Declared part-time preferred OFF days per doctor (from the orthogonal `tp_work` layer).
     const tpPreferred: Record<string, number[]> = {};
     for (const [name, perDay] of Object.entries((availData.tpWork ?? {}) as Record<string, Record<string, boolean>>)) {
       const tDays = Object.entries(perDay).filter(([, v]) => v).map(([d]) => Number(d));
