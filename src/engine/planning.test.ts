@@ -668,3 +668,20 @@ describe('solvePlanning — plancher d\'effectif (spec §1.1)', () => {
     if (res.status === 'infeasible') expect(res.reason).not.toContain('6 présents');
   });
 });
+
+describe('solvePlanning — anomalies hebdomadaires (spec §1.3)', () => {
+  it('signale les semaines complètes travaillées sans garde (16 médecins > 14 gardes/semaine)', async () => {
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: doctors(16) });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    // 16 médecins × 3 semaines pleines = 48 gardes attendues pour 42 places : anomalies garanties.
+    expect(res.warnings.some((w) => w.startsWith('Anomalie :') && w.includes('sans garde'))).toBe(true);
+  });
+
+  it('PAS d\'anomalie pour un médecin en G− toute la semaine', async () => {
+    const availD01: Record<number, 'no_garde'> = {};
+    for (let d = 5; d <= 11; d++) availD01[d] = 'no_garde'; // semaine lun 5 → dim 11 oct. 2026
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: doctors(16), availability: { D01: availD01 } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.warnings.some((w) => w.startsWith('Anomalie :') && w.includes('D01') && w.includes('du 5 au 11'))).toBe(false);
+  });
+});

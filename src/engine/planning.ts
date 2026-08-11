@@ -288,9 +288,31 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     gardeWeight[doc] = fte[doc] * ((totalDays - nonTpBlocked.size) / totalDays);
   }
 
+  // Semaines complètes travaillées (spec §1.3 « une garde par semaine ») : semaine calendaire
+  // lun→dim entièrement dans le mois, où le médecin est présent tous les jours ouvrés (ni congé
+  // ni jour off TP) ET peut prendre au moins une garde dans la semaine (exception : G− — ou
+  // autre blocage — posé sur TOUTE la semaine). Sert au solveur (couverture) puis aux anomalies.
+  const weeklyExpected: Record<DoctorId, number[][]> = {};
+  for (const cd of days) {
+    if (cd.weekday !== 0) continue; // lundi
+    const week = days.filter((x) => x.day >= cd.day && x.day < cd.day + 7);
+    if (week.length < 7) continue; // semaine tronquée par le bord du mois
+    const weekdaysOfWeek = week.filter((x) => !x.isWeekend && !x.isHoliday);
+    if (weekdaysOfWeek.length === 0) continue;
+    for (const doc of doctors) {
+      const fullyWorked = weekdaysOfWeek.every(
+        (x) => PRESENT(avail(input, doc, x.day)) && !tpDays[doc].has(x.day),
+      );
+      if (!fullyWorked) continue;
+      const blockedSet = new Set(gardeBlocked[doc] ?? []);
+      if (week.every((x) => blockedSet.has(x.day))) continue; // G−/blocage toute la semaine
+      (weeklyExpected[doc] ??= []).push(week.map((x) => x.day));
+    }
+  }
+
   const gardeInput: GardeInput = {
     year: input.year, month: input.month, doctors,
-    gardeBlocked, holidays: input.holidays, wishes, fte: gardeWeight,
+    gardeBlocked, holidays: input.holidays, wishes, fte: gardeWeight, weeklyExpected,
     // Cross-month equity: last published month's counters relieve whoever was overloaded.
     carryCount: input.carryCount, carryHeavy: input.carryHeavy, carryWeekend: input.carryWeekend,
     // "Jamais G1" doctors (Dzierzek) + acupuncture doctors are ALWAYS G2 — role balancer rule.
@@ -303,6 +325,17 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
   const gardeByDay: Record<number, { G1?: DoctorId; G2?: DoctorId }> = {};
   for (const a of gardes.assignments) (gardeByDay[a.day] ??= {})[a.role] = a.doctorId;
+
+  // Anomalies hebdomadaires (spec §1.3) : toute semaine attendue restée sans garde est écrite
+  // à l'admin dans le bandeau — le solveur fait le maximum (14 gardes/semaine seulement), les
+  // manques doivent se voir et tourner d'un mois à l'autre, jamais passer sous silence.
+  const onGarde = (doc: DoctorId, day: number) => gardeByDay[day]?.G1 === doc || gardeByDay[day]?.G2 === doc;
+  for (const doc of doctors) {
+    for (const week of weeklyExpected[doc] ?? []) {
+      if (week.some((d) => onGarde(doc, d))) continue;
+      warnings.push(`Anomalie : ${doc} travaille toute la semaine du ${week[0]} au ${week[week.length - 1]} sans garde.`);
+    }
+  }
 
   const acuOn = input.acupuncture !== false; // acupuncture scheduling active for this planning
   // Guard-rail: ACU active but nobody carries the profile → the flag was probably lost in the
