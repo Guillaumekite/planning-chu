@@ -349,3 +349,37 @@ describe('solveGardes — week-ends : jamais 2× le même jour, exception G+ (sp
     expect(weDays).toEqual([3, 10]); // exactement ses G+ de week-end, rien de plus
   });
 });
+
+describe('solveGardes — espacement et couverture hebdomadaire (spec §1.3)', () => {
+  it('14 médecins pleinement présents : chaque semaine complète travaillée contient une garde', async () => {
+    const ds = doctors(14);
+    const weeks = [
+      [5, 6, 7, 8, 9, 10, 11],
+      [12, 13, 14, 15, 16, 17, 18],
+      [19, 20, 21, 22, 23, 24, 25],
+    ]; // oct. 2026 : lundis 5, 12, 19 — 3 semaines lun→dim entières
+    const weeklyExpected = Object.fromEntries(ds.map((d) => [d, weeks]));
+    const res = await solveGardes({ year: 2026, month: 10, doctors: ds, weeklyExpected });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const byDoc = new Map(ds.map((d) => [d, new Set<number>()]));
+    for (const a of res.assignments) byDoc.get(a.doctorId)!.add(a.day);
+    let missed = 0;
+    for (const d of ds) for (const wk of weeks) if (!wk.some((day) => byDoc.get(d)!.has(day))) missed++;
+    // 14 médecins × 3 semaines = 42 gardes attendues pour 42 places (14 j × 2 + bords) : zéro raté.
+    expect(missed).toBe(0);
+  });
+
+  it('écart maximal entre 2 gardes consécutives d\'un médecin ≤ 2× l\'écart idéal', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(10) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const byDoc: Record<string, number[]> = {};
+    for (const a of res.assignments) (byDoc[a.doctorId] ??= []).push(a.day);
+    for (const ds2 of Object.values(byDoc)) {
+      ds2.sort((x, y) => x - y);
+      const ideal = 31 / (ds2.length + 1);
+      for (let i = 1; i < ds2.length; i++) expect(ds2[i] - ds2[i - 1]).toBeLessThanOrEqual(Math.ceil(2 * ideal));
+    }
+  });
+});

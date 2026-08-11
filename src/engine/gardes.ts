@@ -290,7 +290,7 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   const assigned: DoctorId[][] = days.map((cd) =>
     doctors.filter((doc) => !isBlocked(cd.day, doc) && feasible[gv(cd.day, doc)]),
   );
-  polishEquity(days, doctors, assigned, blocked, targets, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2);
+  polishEquity(days, doctors, assigned, blocked, targets, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2, input.weeklyExpected ?? {});
 
   // ---- Build result ----
   const count: Record<DoctorId, number> = {};
@@ -608,6 +608,21 @@ async function solveFeasibility(
       }
     }
   }
+  // Couverture hebdomadaire (spec §1.3) : pour chaque semaine complète travaillée d'un médecin,
+  // Σ gardes de la semaine + slack ≥ 1 — le slack (pénalisé) rend la règle souple : le solveur
+  // couvre chaque semaine attendue quand c'est faisable, sinon l'anomalie ressort côté planning.
+  const weeklyExpected = input.weeklyExpected ?? {};
+  for (const doc of doctors) {
+    (weeklyExpected[doc] ?? []).forEach((week, wi) => {
+      const vars = week
+        .filter((d) => byDay.has(d) && allowed(d, doc))
+        .map((d) => ({ name: gv(d, doc), coef: 1 }));
+      if (!vars.length) return;
+      const slack = `wslack_${wi}_${doc}`;
+      subjectTo.push({ name: `week_${wi}_${doc}`, vars: [...vars, { name: slack, coef: 1 }], bnds: { type: glpk.GLP_LO, lb: 1, ub: 0 } });
+      objVars.push({ name: slack, coef: 8 });
+    });
+  }
   // Forced G+ (≤ 2 wishers that day): the doctor's garde on that day is REQUIRED.
   for (const key of plan.forced) {
     const [dStr, doc] = key.split('|');
@@ -650,6 +665,7 @@ function polishEquity(
   fte: Record<DoctorId, number>,
   plan: WishPlan,
   forceG2: Set<DoctorId>,
+  weeklyExpected: Record<DoctorId, number[][]>,
 ) {
   const isBlocked = (d: number, doc: DoctorId) => (blocked[doc] ?? []).includes(d);
   const dayList: Record<DoctorId, Set<number>> = {};
@@ -746,7 +762,20 @@ function polishEquity(
   // (6×−4 = −24 < −20), while a 2nd pairing (Δpair −2 → −12) is tolerated — with ≥3 gardes the
   // partner still has enough free edges for the role-repair phase to rebalance.
   const W_PAIR = 6;
-  const W_SPREAD = 0.3; // even monthly spacing (secondary refinement)
+  // L'espacement reste SOUS l'équité de comptage (le nombre de gardes prime — spec §1.3) :
+  // ce sont les ÉCHANGES, neutres en nombre, qui portent l'essentiel du lissage des écarts.
+  const W_SPREAD = 0.6;
+  // Une semaine complète travaillée sans garde est une ANOMALIE (spec §1.3) : la pénalité doit
+  // dominer les gains marginaux de comptage (~10×(2·écart−1) ≤ 20 pour un écart ≤ 1,5) pour
+  // que le polissage ne « vole » jamais la garde hebdomadaire d'un médecin.
+  const W_WEEK = 25;
+
+  // Coût hebdomadaire : nombre de semaines attendues du médecin sans aucune garde.
+  const weekCost = (doc: DoctorId, set: Set<number>): number => {
+    let missed = 0;
+    for (const week of weeklyExpected[doc] ?? []) if (!week.some((d) => set.has(d))) missed++;
+    return missed;
+  };
 
   // Pairings with forceG2 doctors: every day shared with one forces the partner into G1, so
   // repeated pairings make |G1−G2| balance impossible for that partner. Quadratic penalty on the
@@ -780,12 +809,38 @@ function polishEquity(
   };
 
   const sc: Record<DoctorId, number> = {};
-  for (const doc of doctors) sc[doc] = spreadCost(dayList[doc]);
+  const wc: Record<DoctorId, number> = {};
+  for (const doc of doctors) {
+    sc[doc] = spreadCost(dayList[doc]);
+    wc[doc] = weekCost(doc, dayList[doc]);
+  }
+
+  // Échange faisable ? `b` peut prendre le jour `d` en IGNORANT sa propre garde du jour
+  // `ignore` (celle qu'il cède dans l'échange) — mêmes règles que canTake, compteurs ajustés.
+  const canTakeIgnoring = (b: DoctorId, d: number, ignore: number): boolean => {
+    if (isBlocked(d, b)) return false;
+    const cd = dayByNum.get(d)!;
+    const cdIgn = dayByNum.get(ignore)!;
+    if (isGardeWeekend(cd)) {
+      const weAfter = monthWe[b] - (isGardeWeekend(cdIgn) ? 1 : 0);
+      if (plan.weekendDup) {
+        if (weAfter >= plan.weCap) return false;
+      } else {
+        if ((plan.weekendWishes[b]?.size ?? 0) > 0) return false;
+        const wdAfter = (monthWeByWd[b][cd.weekday] ?? 0) - (isGardeWeekend(cdIgn) && cdIgn.weekday === cd.weekday ? 1 : 0);
+        if (weAfter >= plan.weCap || wdAfter >= 1) return false;
+      }
+    }
+    const has = (x: number) => x !== ignore && hasGarde(b, x);
+    if (has(d) || has(d - 1) || has(d + 1)) return false;
+    if (plan.restGap >= 3 && (has(d - 2) || has(d + 2))) return false;
+    return true;
+  };
 
   const MAX_ITER = 8000;
   for (let iter = 0; iter < MAX_ITER; iter++) {
     let bestDelta = -1e-9; // require strict improvement
-    let best: { di: number; a: DoctorId; b: DoctorId; scA: number; scB: number } | null = null;
+    let best: { di: number; a: DoctorId; b: DoctorId; scA: number; scB: number; wcA: number; wcB: number } | null = null;
 
     days.forEach((cd, di) => {
       const heavy = isHeavy(cd);
@@ -808,22 +863,100 @@ function polishEquity(
           // Pairing spread with forceG2 doctors (the day's OTHER doctor stays).
           const o = assigned[di][0] === a ? assigned[di][1] : assigned[di][0];
           if (o !== undefined) delta += W_PAIR * pairDelta(o, a, b);
-          // Spread delta: recompute the two doctors' spacing cost with the garde moved a→b.
+          // Spread & weekly deltas: recompute the two doctors' costs with the garde moved a→b.
           const aSet = new Set(dayList[a]); aSet.delete(cd.day);
           const bSet = new Set(dayList[b]); bSet.add(cd.day);
           const scA = spreadCost(aSet);
           const scB = spreadCost(bSet);
           delta += W_SPREAD * (scA + scB - sc[a] - sc[b]);
+          const wcA = weekCost(a, aSet);
+          const wcB = weekCost(b, bSet);
+          delta += W_WEEK * (wcA + wcB - wc[a] - wc[b]);
           if (delta < bestDelta) {
             bestDelta = delta;
-            best = { di, a, b, scA, scB };
+            best = { di, a, b, scA, scB, wcA, wcB };
           }
         }
       }
     });
 
-    if (!best) break;
-    const { di, a, b, scA, scB } = best;
+    if (!best) {
+      // --- Voisinage d'ÉCHANGES : a (jour i) ↔ b (jour j). Le nombre de gardes de chacun ne
+      // change pas, mais pénibilité/week-ends/espacement/semaines se redistribuent — c'est ce
+      // qui débloque les optima locaux hors de portée des déplacements simples (spec §1.3).
+      let bestSwap: { di: number; dj: number; a: DoctorId; b: DoctorId; delta: number } | null = null;
+      for (let di = 0; di < days.length; di++) {
+        const cdI = days[di];
+        for (const a of assigned[di]) {
+          if (plan.forced.has(`${cdI.day}|${a}`)) continue;
+          for (let dj = di + 1; dj < days.length; dj++) {
+            const cdJ = days[dj];
+            for (const b of assigned[dj]) {
+              if (b === a) continue;
+              if (plan.forced.has(`${cdJ.day}|${b}`)) continue;
+              if (assigned[di].includes(b) || assigned[dj].includes(a)) continue;
+              if (!canTakeIgnoring(a, cdJ.day, cdI.day) || !canTakeIgnoring(b, cdI.day, cdJ.day)) continue;
+              let delta = 0;
+              const dH = (isHeavy(cdJ) ? 1 : 0) - (isHeavy(cdI) ? 1 : 0); // a perd I, gagne J
+              if (dH !== 0) {
+                delta += W_HEAVY * (sq(cumHeavy[a] + dH - tgtHeavy[a]) - sq(cumHeavy[a] - tgtHeavy[a])
+                  + sq(cumHeavy[b] - dH - tgtHeavy[b]) - sq(cumHeavy[b] - tgtHeavy[b]));
+              }
+              const dW = (isGardeWeekend(cdJ) ? 1 : 0) - (isGardeWeekend(cdI) ? 1 : 0);
+              if (dW !== 0) {
+                delta += W_WE * (sq(cumWe[a] + dW - tgtWe[a]) - sq(cumWe[a] - tgtWe[a])
+                  + sq(cumWe[b] - dW - tgtWe[b]) - sq(cumWe[b] - tgtWe[b]));
+              }
+              const oI = assigned[di][0] === a ? assigned[di][1] : assigned[di][0];
+              const oJ = assigned[dj][0] === b ? assigned[dj][1] : assigned[dj][0];
+              if (oI !== undefined) delta += W_PAIR * pairDelta(oI, a, b);
+              if (oJ !== undefined) delta += W_PAIR * pairDelta(oJ, b, a);
+              const aSet = new Set(dayList[a]); aSet.delete(cdI.day); aSet.add(cdJ.day);
+              const bSet = new Set(dayList[b]); bSet.delete(cdJ.day); bSet.add(cdI.day);
+              delta += W_SPREAD * (spreadCost(aSet) + spreadCost(bSet) - sc[a] - sc[b]);
+              delta += W_WEEK * (weekCost(a, aSet) + weekCost(b, bSet) - wc[a] - wc[b]);
+              if (delta < (bestSwap?.delta ?? -1e-9)) bestSwap = { di, dj, a, b, delta };
+            }
+          }
+        }
+      }
+      if (!bestSwap) break;
+      const { di: si, dj: sj, a: sa, b: sb } = bestSwap;
+      const cdI = days[si];
+      const cdJ = days[sj];
+      // Compteurs de pairage forceG2 des deux jours échangés.
+      const oI = assigned[si][0] === sa ? assigned[si][1] : assigned[si][0];
+      const oJ = assigned[sj][0] === sb ? assigned[sj][1] : assigned[sj][0];
+      if (oI !== undefined) {
+        if (forceG2.has(oI)) { pcnt[oI][sa] = (pcnt[oI][sa] ?? 0) - 1; pcnt[oI][sb] = (pcnt[oI][sb] ?? 0) + 1; }
+        if (forceG2.has(sa)) pcnt[sa][oI] = (pcnt[sa][oI] ?? 0) - 1;
+        if (forceG2.has(sb)) pcnt[sb][oI] = (pcnt[sb][oI] ?? 0) + 1;
+      }
+      if (oJ !== undefined) {
+        if (forceG2.has(oJ)) { pcnt[oJ][sb] = (pcnt[oJ][sb] ?? 0) - 1; pcnt[oJ][sa] = (pcnt[oJ][sa] ?? 0) + 1; }
+        if (forceG2.has(sb)) pcnt[sb][oJ] = (pcnt[sb][oJ] ?? 0) - 1;
+        if (forceG2.has(sa)) pcnt[sa][oJ] = (pcnt[sa][oJ] ?? 0) + 1;
+      }
+      assigned[si] = assigned[si].map((x) => (x === sa ? sb : x));
+      assigned[sj] = assigned[sj].map((x) => (x === sb ? sa : x));
+      dayList[sa].delete(cdI.day); dayList[sa].add(cdJ.day);
+      dayList[sb].delete(cdJ.day); dayList[sb].add(cdI.day);
+      for (const [cdX, gain, lose] of [[cdI, sb, sa], [cdJ, sa, sb]] as [CalendarDay, DoctorId, DoctorId][]) {
+        if (isHeavy(cdX)) { cumHeavy[gain] += 1; cumHeavy[lose] -= 1; }
+        if (isGardeWeekend(cdX)) {
+          cumWe[gain] += 1; cumWe[lose] -= 1;
+          monthWe[gain] += 1; monthWe[lose] -= 1;
+          monthWeByWd[gain][cdX.weekday] = (monthWeByWd[gain][cdX.weekday] ?? 0) + 1;
+          monthWeByWd[lose][cdX.weekday] = (monthWeByWd[lose][cdX.weekday] ?? 0) - 1;
+        }
+      }
+      sc[sa] = spreadCost(dayList[sa]);
+      sc[sb] = spreadCost(dayList[sb]);
+      wc[sa] = weekCost(sa, dayList[sa]);
+      wc[sb] = weekCost(sb, dayList[sb]);
+      continue;
+    }
+    const { di, a, b, scA, scB, wcA, wcB } = best;
     const cd = days[di];
     // Update forceG2 pairing counts before rewriting the day's pair.
     const stay = assigned[di][0] === a ? assigned[di][1] : assigned[di][0];
@@ -840,6 +973,8 @@ function polishEquity(
     dayList[b].add(cd.day);
     sc[a] = scA;
     sc[b] = scB;
+    wc[a] = wcA;
+    wc[b] = wcB;
     monthCount[a] -= 1;
     monthCount[b] += 1;
     if (isHeavy(cd)) {
