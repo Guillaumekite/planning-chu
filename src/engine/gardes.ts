@@ -53,6 +53,42 @@ function gv(day: number, doctor: DoctorId): string {
   return `g_${day}_${doctor}`;
 }
 
+/**
+ * Cible mensuelle de gardes par médecin : part proportionnelle au poids (FTE × disponibilité)
+ * du mois courant, corrigée du mois précédent en RATIO gardes/jours travaillés — correction
+ * BORNÉE à ±1 garde (spec §1.3 : le carry ajuste, il n'écrase jamais le mois courant).
+ * La base de comparaison couvre TOUT le roster (pas de carry = 0 garde reportée) ; un médecin
+ * sans aucune donnée du mois précédent (nouveau) reste neutre : cible = sa part.
+ */
+export function computeGardeTargets(
+  doctors: DoctorId[],
+  totalSlots: number,
+  weight: Record<DoctorId, number>,
+  carryCount: Record<DoctorId, number>,
+  carryWorked: Record<DoctorId, number>,
+): Record<DoctorId, number> {
+  const w = (d: DoctorId) => weight[d] ?? 1;
+  const W = doctors.reduce((s, d) => s + w(d), 0) || 1;
+  const totC = doctors.reduce((s, d) => s + (carryCount[d] ?? 0), 0);
+  const totW = doctors.reduce((s, d) => s + (carryWorked[d] ?? 0), 0);
+  const targets: Record<DoctorId, number> = {};
+  for (const doc of doctors) {
+    const share = (totalSlots * w(doc)) / W;
+    let corr = 0;
+    if (totC > 0) {
+      const isNew = (carryCount[doc] ?? 0) === 0 && totW > 0 && (carryWorked[doc] ?? 0) === 0;
+      if (!isNew) {
+        const expected = totW > 0
+          ? (carryWorked[doc] ?? 0) * (totC / totW) // attendu au ratio du mois précédent
+          : totC / doctors.length; // jours travaillés inconnus : moyenne simple (rétro-compat)
+        corr = Math.max(-1, Math.min(1, (carryCount[doc] ?? 0) - expected));
+      }
+    }
+    targets[doc] = Math.max(0, share - corr);
+  }
+  return targets;
+}
+
 export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   const weights: GardeWeights = { ...DEFAULT_WEIGHTS, ...(input.weights ?? {}) };
   const days = buildMonth(input.year, input.month, weights, input.holidays ?? []);
@@ -214,7 +250,8 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   const assigned: DoctorId[][] = days.map((cd) =>
     doctors.filter((doc) => !isBlocked(cd.day, doc) && feasible[gv(cd.day, doc)]),
   );
-  polishEquity(days, doctors, assigned, blocked, carryCount, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2);
+  const targets = computeGardeTargets(doctors, 2 * days.length, input.fte ?? {}, carryCount, input.carryWorked ?? {});
+  polishEquity(days, doctors, assigned, blocked, targets, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2);
 
   // ---- Build result ----
   const count: Record<DoctorId, number> = {};
@@ -531,7 +568,7 @@ function polishEquity(
   doctors: DoctorId[],
   assigned: DoctorId[][],
   blocked: Record<DoctorId, number[]>,
-  carryCount: Record<DoctorId, number>,
+  targets: Record<DoctorId, number>,
   carryHeavy: Record<DoctorId, number>,
   carryWeekend: Record<DoctorId, number>,
   fte: Record<DoctorId, number>,
@@ -540,10 +577,10 @@ function polishEquity(
 ) {
   const isBlocked = (d: number, doc: DoctorId) => (blocked[doc] ?? []).includes(d);
   const dayList: Record<DoctorId, Set<number>> = {};
-  // CUMULATIVE counts (carry from previous months + this month), so fairness is judged over the
-  // whole horizon on three axes: total garde COUNT, HEAVY (Thu→Sun) count, and WEEKEND (Fri/Sat/Sun)
-  // count — so both the number of gardes and the painful/weekend ones ROTATE across people & months.
-  const cumCount: Record<DoctorId, number> = {};
+  // COUNT axis: MONTHLY count vs the doctor's monthly target (`targets`, which already folds in
+  // the previous-month carry as a bounded ±1 ratio correction — spec §1.3). HEAVY (Thu→Sun) and
+  // WEEKEND (Fri/Sat/Sun) axes stay CUMULATIVE (carry + this month) so the painful/weekend
+  // gardes keep rotating across people & months.
   const cumHeavy: Record<DoctorId, number> = {};
   const cumWe: Record<DoctorId, number> = {};
   // THIS-month counts per doctor — the monthly caps apply to them (not to the carry).
@@ -551,7 +588,6 @@ function polishEquity(
   const monthWe: Record<DoctorId, number> = {};
   for (const doc of doctors) {
     dayList[doc] = new Set();
-    cumCount[doc] = carryCount[doc] ?? 0;
     cumHeavy[doc] = carryHeavy[doc] ?? 0;
     cumWe[doc] = carryWeekend[doc] ?? 0;
     monthCount[doc] = 0;
@@ -561,7 +597,6 @@ function polishEquity(
     const heavy = isHeavy(cd);
     for (const doc of assigned[di]) {
       dayList[doc].add(cd.day);
-      cumCount[doc] += 1;
       monthCount[doc] += 1;
       if (heavy) cumHeavy[doc] += 1;
       if (isGardeWeekend(cd)) { cumWe[doc] += 1; monthWe[doc] += 1; }
@@ -595,19 +630,19 @@ function polishEquity(
     return c;
   };
 
-  // Per-doctor fairness TARGETS, proportional to full-time-equivalent (FTE). A 50% doctor's
-  // target is half a full-timer's → part-timers get proportionally fewer gardes/weekends.
+  // COUNT target = the monthly `targets` (proportional share + bounded carry correction).
+  // HEAVY/WEEKEND targets stay proportional to full-time-equivalent (FTE) over the cumulative
+  // horizon. A 50% doctor's target is half a full-timer's → proportionally fewer gardes/weekends.
   const w = (doc: DoctorId) => fte[doc] ?? 1;
   const W = doctors.reduce((s, d) => s + w(d), 0) || 1;
   const sum = (m: Record<DoctorId, number>) => Object.values(m).reduce((s, v) => s + v, 0);
-  const totalCount = sum(cumCount);
   const totalHeavy = sum(cumHeavy);
   const totalWe = sum(cumWe);
   const tgtCount: Record<DoctorId, number> = {};
   const tgtHeavy: Record<DoctorId, number> = {};
   const tgtWe: Record<DoctorId, number> = {};
   for (const doc of doctors) {
-    tgtCount[doc] = (totalCount * w(doc)) / W;
+    tgtCount[doc] = targets[doc] ?? 0;
     tgtHeavy[doc] = (totalHeavy * w(doc)) / W;
     tgtWe[doc] = (totalWe * w(doc)) / W;
   }
@@ -673,7 +708,7 @@ function polishEquity(
           if (!canTake(b, cd.day)) continue;
           // Fairness deltas vs each doctor's FTE-proportional target (count always; heavy/weekend on those days).
           let delta =
-            W_COUNT * (sq(cumCount[a] - 1 - tgtCount[a]) + sq(cumCount[b] + 1 - tgtCount[b]) - sq(cumCount[a] - tgtCount[a]) - sq(cumCount[b] - tgtCount[b]));
+            W_COUNT * (sq(monthCount[a] - 1 - tgtCount[a]) + sq(monthCount[b] + 1 - tgtCount[b]) - sq(monthCount[a] - tgtCount[a]) - sq(monthCount[b] - tgtCount[b]));
           if (heavy) {
             delta += W_HEAVY * (sq(cumHeavy[a] - 1 - tgtHeavy[a]) + sq(cumHeavy[b] + 1 - tgtHeavy[b]) - sq(cumHeavy[a] - tgtHeavy[a]) - sq(cumHeavy[b] - tgtHeavy[b]));
           }
@@ -715,8 +750,6 @@ function polishEquity(
     dayList[b].add(cd.day);
     sc[a] = scA;
     sc[b] = scB;
-    cumCount[a] -= 1;
-    cumCount[b] += 1;
     monthCount[a] -= 1;
     monthCount[b] += 1;
     if (isHeavy(cd)) {

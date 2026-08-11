@@ -45,6 +45,10 @@ export interface GardeInput {
   gardeBlocked?: Record<DoctorId, number[]>;
   /** Per doctor: cumulative garde COUNT from previous months (count fairness across months). */
   carryCount?: Record<DoctorId, number>;
+  /** Per doctor: WORKED-day count of the previous published month. Turns the carry into a
+   * RATIO (gardes/jours travaillés) so a doctor with few gardes because they were absent is
+   * not wrongly "caught up". The resulting correction is bounded to ±1 garde (spec §1.3). */
+  carryWorked?: Record<DoctorId, number>;
   /** Per doctor: cumulative "heavy" (Thu→Sun) garde count from previous months. */
   carryHeavy?: Record<DoctorId, number>;
   /** Per doctor: cumulative weekend (Fri/Sat/Sun) garde count from previous months (WE rotation). */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { solveGardes } from './gardes';
+import { solveGardes, computeGardeTargets } from './gardes';
 import { daysInMonth, buildMonth } from './calendar';
 import { mulberry32, randInt } from './rng';
 import { DEFAULT_WEIGHTS } from './types';
@@ -265,5 +265,35 @@ describe('solveGardes — determinism', () => {
     const a = await solveGardes(input);
     const b = await solveGardes(input);
     expect(JSON.stringify(a)).toEqual(JSON.stringify(b));
+  });
+});
+
+describe('computeGardeTargets — carry du mois précédent en ratio, borné ±1 (spec §1.3)', () => {
+  it('sans carry : part proportionnelle au poids', () => {
+    const t = computeGardeTargets(['a', 'b'], 60, { a: 1, b: 1 }, {}, {});
+    expect(t.a).toBeCloseTo(30);
+    expect(t.b).toBeCloseTo(30);
+  });
+
+  it('un médecin surchargé le mois dernier est soulagé d\'AU PLUS 1 garde', () => {
+    // a a fait 7 gardes en 20 jours travaillés, b 3 en 20 : gros déséquilibre passé,
+    // mais la correction est bornée : |cible − part| ≤ 1.
+    const t = computeGardeTargets(['a', 'b'], 60, { a: 1, b: 1 }, { a: 7, b: 3 }, { a: 20, b: 20 });
+    expect(t.a).toBeGreaterThanOrEqual(29);
+    expect(t.a).toBeLessThan(30);
+    expect(t.b).toBeGreaterThan(30);
+    expect(t.b).toBeLessThanOrEqual(31);
+  });
+
+  it('le ratio compte, pas le brut : moins de gardes parce que moins présent ⇒ pas de rattrapage', () => {
+    // a : 3 gardes / 10 jours travaillés (ratio 0.3) ; b : 6 / 20 (ratio 0.3) — même ratio ⇒ corrections ~0.
+    const t = computeGardeTargets(['a', 'b'], 60, { a: 1, b: 1 }, { a: 3, b: 6 }, { a: 10, b: 20 });
+    expect(Math.abs(t.a - 30)).toBeLessThan(0.5);
+    expect(Math.abs(t.b - 30)).toBeLessThan(0.5);
+  });
+
+  it('un nouveau médecin (aucune donnée du mois précédent) reste neutre : cible = sa part', () => {
+    const t = computeGardeTargets(['a', 'b', 'neuf'], 60, { a: 1, b: 1, neuf: 1 }, { a: 5, b: 3 }, { a: 20, b: 20 });
+    expect(Math.abs(t.neuf - 20)).toBeLessThanOrEqual(0.01);
   });
 });
