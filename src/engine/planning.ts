@@ -54,6 +54,8 @@ export interface DoctorProfile {
   forceG2?: boolean;
   /** "Pas de S" : never assigned the S post. */
   noS?: boolean;
+  /** "Jamais HC" : never assigned the HC post (Dr Dzierzek). */
+  noHC?: boolean;
   /** Eligible for the P (présence) post — assigned only when ≥ 12 travaillants. */
   presence?: boolean;
 }
@@ -273,8 +275,9 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // "Jamais G1" — doctors who NEVER take the G1 role (Dzierzek: back problems). Independent flag,
   // plus the acupuncture doctors (their evening-G2-after-ACU rule still requires G2-only).
   const neverG1 = new Set(doctors.filter((doc) => input.profiles?.[doc]?.forceG2 || acuDocs.has(doc)));
-  // "Pas de S" and "P" (présence) eligibility.
+  // "Pas de S", "Jamais HC" and "P" (présence) eligibility.
   const noS = new Set(doctors.filter((doc) => input.profiles?.[doc]?.noS));
+  const noHC = new Set(doctors.filter((doc) => input.profiles?.[doc]?.noHC));
   const presenceDocs = new Set(doctors.filter((doc) => input.profiles?.[doc]?.presence));
 
   // University-constraint days ("Univ") the doctor declared themselves. Honored only for universitaire

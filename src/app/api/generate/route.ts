@@ -19,6 +19,7 @@ const ProfileSchema = z.object({
   douleurPoids: z.number().int().min(0).max(2).optional(),
   forceG2: z.boolean().optional(), // "Jamais G1" — jamais le rôle G1 (ex. Dzierzek)
   noS: z.boolean().optional(), // jamais le poste S
+  noHC: z.boolean().optional(), // jamais le poste HC (hors clinique) — ex. Dzierzek
   presence: z.boolean().optional(), // éligible au poste P (≥ 12 travaillants)
 });
 

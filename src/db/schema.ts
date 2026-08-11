@@ -30,6 +30,8 @@ ALTER TABLE doctors ADD COLUMN IF NOT EXISTS acu_lundi boolean NOT NULL DEFAULT 
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS acu_mercredi boolean NOT NULL DEFAULT false;
 -- "Pas de S" : jamais affecté au poste S.
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS no_s boolean NOT NULL DEFAULT false;
+-- "Jamais HC" : jamais affecté au poste HC (hors clinique) — ex. Dzierzek.
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS no_hc boolean NOT NULL DEFAULT false;
 -- "P" : éligible au poste Présence (posé seulement quand ≥ 12 travaillants).
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS presence boolean NOT NULL DEFAULT false;
 
