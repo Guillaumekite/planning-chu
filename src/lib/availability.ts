@@ -12,7 +12,7 @@ export type CongeStatusByName = Record<string, Record<number, string>>;
 export type CongeNoteByName = Record<string, Record<number, string>>;
 /** doctor name → (day → true) for declared university-constraint days. */
 export type UnivByName = Record<string, Record<number, boolean>>;
-/** doctor name → (day → true) for declared part-time preferred working days ("TP"). */
+/** doctor name → (day → true) for declared part-time preferred OFF days ("TP"). */
 export type TpWorkByName = Record<string, Record<number, boolean>>;
 
 export async function getAvailability(
