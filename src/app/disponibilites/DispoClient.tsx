@@ -18,8 +18,9 @@ type Brush = Availability | 'univ' | 'tp';
 
 export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; doctorId: number | null }) {
   const [doctors, setDoctors] = useState<Doc[]>([]);
-  const [year, setYear] = useState(2026);
-  const [month, setMonth] = useState(4);
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
   const [saved, setSaved] = useState<Avail>({});
   const [pending, setPending] = useState<Avail>({});
   const [conge, setConge] = useState<Conge>({});
