@@ -467,10 +467,11 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     expect(Math.abs(gardes(r2, 'D02') - avg2)).toBeLessThanOrEqual(1.5);
   });
 
-  it('places U on EXACTLY the declared Univ days (no auto %-fill) when constraints are posted', async () => {
+  it('les jours Univ déclarés sont posés tels quels ET complétés au ratio du profil (spec §2)', async () => {
     const docs = doctors(12);
-    // D01 is universitaire but never gardable (no_garde every day) → declared days become plain 'U',
+    // D01 is universitaire, never gardable (no_garde every day) → declared days become plain 'U',
     // with no garde/RS interference. Declared weekdays in April 2026: 7, 14, 21 (all Tuesdays).
+    // La complétion automatique doit ensuite amener le total vers ~50 % des jours ouvrés.
     const noGarde: Record<number, 'no_garde'> = {};
     for (let d = 1; d <= 30; d++) noGarde[d] = 'no_garde';
     const res = await solvePlanning({
@@ -481,7 +482,10 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     });
     if (res.status !== 'feasible') throw new Error('expected feasible');
     const uDays = res.days.filter((cd) => (res.grid.D01[cd.day] ?? '').startsWith('U')).map((cd) => cd.day);
-    expect(uDays.sort((a, b) => a - b)).toEqual([7, 14, 21]);
+    expect(uDays).toEqual(expect.arrayContaining([7, 14, 21])); // déclarés fixes
+    const workdays = weekdaysOf(2026, 4).length; // 22 jours ouvrés
+    expect(uDays.length).toBeGreaterThan(3); // le bug « déclaré ⇒ plus d'auto-complétion » est mort
+    expect(Math.abs(uDays.length - Math.round(0.5 * workdays))).toBeLessThanOrEqual(2);
   });
 
   it('blocks the garde the DAY BEFORE a declared Univ day (RS would clash with being at university)', async () => {
@@ -683,5 +687,32 @@ describe('solvePlanning — anomalies hebdomadaires (spec §1.3)', () => {
     const res = await solvePlanning({ year: 2026, month: 10, doctors: doctors(16), availability: { D01: availD01 } });
     if (res.status !== 'feasible') throw new Error('expected feasible');
     expect(res.warnings.some((w) => w.startsWith('Anomalie :') && w.includes('D01') && w.includes('du 5 au 11'))).toBe(false);
+  });
+});
+
+describe('solvePlanning — complétion Univ au ratio (cas Gravero, spec §2)', () => {
+  it('3 jours déclarés + ratio 50 % ⇒ l\'algo complète vers ~50 % des jours ouvrés travaillés', async () => {
+    const res = await solvePlanning({
+      year: 2026, month: 9, doctors: doctors(14),
+      profiles: { D01: { universitaire: true, universityRatio: 50 } },
+      univConstraints: { D01: [1, 8, 15] }, // 3 mardis de septembre 2026
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const uDays = res.days
+      .filter((cd) => (res.grid.D01[cd.day] ?? '').startsWith('U'))
+      .map((cd) => cd.day);
+    expect(uDays).toEqual(expect.arrayContaining([1, 8, 15])); // déclarés fixes
+    const workdays = weekdaysOf(2026, 9).length;
+    expect(uDays.length).toBeGreaterThanOrEqual(Math.floor(0.5 * workdays * 0.7)); // bien plus que 3
+  });
+
+  it('les jours U auto ne cassent jamais le cœur de postes du jour', async () => {
+    const res = await solvePlanning({
+      year: 2026, month: 9, doctors: doctors(14),
+      profiles: { D01: { universitaire: true, universityRatio: 50 } },
+      univConstraints: { D01: [1] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.warnings.filter((w) => w.startsWith('Contrôle du'))).toEqual([]);
   });
 });

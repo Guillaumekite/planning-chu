@@ -122,6 +122,31 @@ function pickEven<T>(items: T[], k: number): T[] {
 }
 
 /**
+ * Choisit `k` jours U automatiques parmi `candidates` : priorité aux jours à fort effectif
+ * (ceux qui partiraient en HC — spec §2), à effectif égal répartis régulièrement dans le mois.
+ * Refuse tout jour où le retrait du médecin ferait tomber les travaillants sous 9 : le cœur
+ * de 8 postes (G1, G2, 2 RS, 2 blocs, S, CS) doit survivre au départ à la fac.
+ */
+function pickUnivDays(candidates: number[], k: number, headcount: (day: number) => number): number[] {
+  if (k <= 0) return [];
+  const ok = candidates.filter((d) => headcount(d) >= 9);
+  const byCount = new Map<number, number[]>();
+  for (const d of ok) {
+    const h = headcount(d);
+    if (!byCount.has(h)) byCount.set(h, []);
+    byCount.get(h)!.push(d);
+  }
+  const chosen: number[] = [];
+  for (const h of [...byCount.keys()].sort((a, b) => b - a)) {
+    if (chosen.length >= k) break;
+    const group = byCount.get(h)!.sort((a, b) => a - b);
+    const need = k - chosen.length;
+    chosen.push(...(group.length <= need ? group : pickEven(group, need)));
+  }
+  return chosen.sort((a, b) => a - b);
+}
+
+/**
  * Part-time off days (TP). A doctor at ratio r works ~r of their available weekdays, with a
  * weekly alternation (50% → 3 days then 2 days; 70% → 4 then 3) via a running credit. The
  * non-working weekdays are returned as the TP set.
@@ -401,35 +426,49 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     }
   }
 
-  // Pass 2 — University (U): for each universitaire doctor WITHOUT declared constraint days, mark
-  // ~ratio% of their WEEKDAY working days as U, spread evenly. Skipped in July/August (academic break).
-  const isAcademicBreak = input.month === 7 || input.month === 8;
-  if (!isAcademicBreak) {
-    for (const doc of doctors) {
-      const prof = input.profiles?.[doc];
-      if (!prof?.universitaire) continue;
-      if (univDays[doc].size > 0) continue; // declared days already placed above
-      const ratio = Math.max(0, Math.min(100, prof.universityRatio ?? 50));
-      const workdays = days
-        .filter((cd) => !cd.isWeekend && !cd.isHoliday && basePresent(doc, cd.day) && !grid[doc][cd.day])
-        .map((cd) => cd.day);
-      const k = Math.round((ratio / 100) * workdays.length);
-      for (const day of pickEven(workdays, k)) grid[doc][day] = 'U';
-    }
-  }
-
   // "Travaillants" — the REAL daily headcount every staffing threshold uses (never the number of
   // doctors merely checked on the roster): on the roster, not on congé, not on a part-time off
   // day, and not at the university that day (U/U+G1/U+G2 — a universitaire may still hold an
   // evening garde but is absent from the day service). G1, G2, RS, ACU — and RÉCUP days — all
   // COUNT as working ("nous sommes 12 à travailler y compris les RS"); récup doctors are simply
   // not assignable to a post (the Pass-3 pool excludes them).
+  // (Défini AVANT la Pass 2 : la complétion Univ cible les jours à fort effectif.)
   const U_CELLS = new Set(['U', 'U+G1', 'U+G2']);
   const compOff = new Set<string>(); // `${doctor}|${day}`
   // An RS cell counts as working even on a part-timer's off day (mandatory rest after a garde).
   const isWorking = (doc: DoctorId, day: number) =>
     (basePresent(doc, day) || grid[doc][day] === 'RS') && !U_CELLS.has(grid[doc][day] ?? '');
   const workingCount = (day: number) => doctors.filter((d) => isWorking(d, day)).length;
+
+  // Pass 2 — University (U) : pour CHAQUE universitaire (jours déclarés ou non), compléter
+  // automatiquement jusqu'au ratio du profil (spec §2 — les jours déclarés comptent dans le
+  // total, l'algo complète le reste ; le bug « déclaré ⇒ plus d'auto-complétion » est corrigé).
+  // Les jours ajoutés privilégient les jours à fort effectif (ceux qui partiraient en HC).
+  // Skipped in July/August (academic break).
+  const isAcademicBreak = input.month === 7 || input.month === 8;
+  if (!isAcademicBreak) {
+    for (const doc of doctors) {
+      const prof = input.profiles?.[doc];
+      if (!prof?.universitaire) continue;
+      const ratio = Math.max(0, Math.min(100, prof.universityRatio ?? 50));
+      const declaredPlaced = days.filter(
+        (cd) => !cd.isWeekend && !cd.isHoliday && U_CELLS.has(grid[doc][cd.day] ?? ''),
+      ).length;
+      const candidates = days
+        .filter((cd) => !cd.isWeekend && !cd.isHoliday && basePresent(doc, cd.day) && !grid[doc][cd.day])
+        .map((cd) => cd.day);
+      const kTotal = Math.round((ratio / 100) * (candidates.length + declaredPlaced));
+      const kAuto = Math.max(0, kTotal - declaredPlaced);
+      const chosen = pickUnivDays(candidates, kAuto, workingCount);
+      for (const day of chosen) grid[doc][day] = 'U';
+      if (chosen.length < kAuto) {
+        warnings.push(
+          `Complétion Univ partielle pour ${doc} : ${declaredPlaced + chosen.length} jours U posés ` +
+            `sur un objectif de ${kTotal} (effectif insuffisant certains jours).`,
+        );
+      }
+    }
+  }
 
   // Acupuncture (Mondays + Wednesdays), only when ≥ 10 doctors work that day (below that, every
   // hand is needed for the mandatory posts). If on the G2 garde that day → 'ACU+G2' (ACU in the
