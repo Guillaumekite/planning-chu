@@ -647,3 +647,24 @@ describe('solvePlanning — jours off préférés du temps partiel (TP)', () => 
     expect(b.grid.D01).toEqual(a.grid.D01);
   });
 });
+
+describe('solvePlanning — plancher d\'effectif (spec §1.1)', () => {
+  it('un jour ouvré à moins de 6 présents ⇒ génération impossible, jours listés', async () => {
+    // 6 médecins ; D01 en congé le jeudi 1er octobre 2026 → 5 présents ce jour-là.
+    const res = await solvePlanning({
+      year: 2026, month: 10, doctors: doctors(6),
+      availability: { D01: { 1: 'conge' } },
+    });
+    expect(res.status).toBe('infeasible');
+    if (res.status !== 'infeasible') return;
+    expect(res.reason).toContain('6 présents');
+    expect(res.reason).toContain('1');
+    expect(res.day).toBe(1);
+  });
+
+  it('6 présents pile un jour ouvré : pas de blocage plancher', async () => {
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: doctors(6) });
+    // 6 présents tous les jours : le plancher ne bloque pas (la faisabilité gardes décide).
+    if (res.status === 'infeasible') expect(res.reason).not.toContain('6 présents');
+  });
+});

@@ -212,6 +212,25 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     tpDays[doc] = computeTpDays(days, (day) => PRESENT(avail(input, doc, day)), fte[doc], forcedOff, forcedWork);
   }
 
+  // Plancher d'effectif (spec §1.1) : moins de 6 présents (hors congé, hors jour off TP) un
+  // jour ouvré ⇒ génération IMPOSSIBLE. On ne relâche aucune règle en dessous de ce plancher —
+  // l'admin voit précisément quels jours bloquent et ajuste congés/roster.
+  const understaffed = days
+    .filter((cd) => !cd.isWeekend && !cd.isHoliday)
+    .filter((cd) => doctors.filter((doc) => PRESENT(avail(input, doc, cd.day)) && !tpDays[doc].has(cd.day)).length < 6)
+    .map((cd) => cd.day);
+  if (understaffed.length) {
+    const first = understaffed[0];
+    return {
+      status: 'infeasible',
+      day: first,
+      reason:
+        `Effectif insuffisant : moins de 6 présents le(s) jour(s) ${understaffed.join(', ')} — ` +
+        `planning impossible (congés/indisponibilités à revoir sur ces jours).`,
+      eligible: doctors.filter((doc) => PRESENT(avail(input, doc, first)) && !tpDays[doc].has(first)),
+    };
+  }
+
   // Wishes (souhait_garde) feed the garde optimiser's soft preference.
   const wishes: Record<DoctorId, number[]> = { ...(input.wishes ?? {}) };
   for (const doc of doctors) {
