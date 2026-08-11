@@ -131,11 +131,13 @@ describe('solveGardes — equity', () => {
 
 describe('solveGardes — G+ wishes are hard & the monthly cap holds', () => {
   it('forces the garde for each wisher when ≤ 2 G+ land on the same day', async () => {
-    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [10], D06: [10] } });
+    // Jour 7 = mardi (un G+ de week-end restreindrait les WE du wisher — spec §1.2 — et
+    // déclencherait une relaxation légitime ; ici on teste le forçage pur, sans warning).
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [7], D06: [7] } });
     expect(res.status).toBe('feasible');
     if (res.status !== 'feasible') return;
-    const day10 = res.assignments.filter((a) => a.day === 10).map((a) => a.doctorId).sort();
-    expect(day10).toEqual(['D05', 'D06']);
+    const day7 = res.assignments.filter((a) => a.day === 7).map((a) => a.doctorId).sort();
+    expect(day7).toEqual(['D05', 'D06']);
     expect(res.warnings).toHaveLength(0);
   });
 
@@ -315,5 +317,35 @@ describe('solveGardes — cap souple 6 et équité portée par le MILP (spec §1
     if (res.status !== 'feasible') return;
     expect(Math.max(...Object.values(res.equity.count))).toBe(7);
     expect(res.warnings.some((w) => w.includes('montent à 7'))).toBe(true);
+  });
+});
+
+describe('solveGardes — week-ends : jamais 2× le même jour, exception G+ (spec §1.2)', () => {
+  const weWd = (day: number) => new Date(Date.UTC(2026, 9, day)).getUTCDay(); // 5=ven, 6=sam, 0=dim
+
+  it('jamais deux vendredis, deux samedis ou deux dimanches pour le même médecin', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(12) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const perDocWd = new Map<string, Map<number, number>>();
+    for (const a of res.assignments) {
+      const wd = weWd(a.day);
+      if (![5, 6, 0].includes(wd)) continue;
+      const m = perDocWd.get(a.doctorId) ?? new Map<number, number>();
+      m.set(wd, (m.get(wd) ?? 0) + 1);
+      perDocWd.set(a.doctorId, m);
+    }
+    for (const m of perDocWd.values()) for (const n of m.values()) expect(n).toBeLessThanOrEqual(1);
+  });
+
+  it('G+ sur 2 samedis : accordés, et AUCUNE autre garde de week-end ajoutée à ce médecin', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(12), wishes: { D01: [3, 10] } });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const mine = res.assignments.filter((a) => a.doctorId === 'D01');
+    expect(mine.some((a) => a.day === 3)).toBe(true);
+    expect(mine.some((a) => a.day === 10)).toBe(true);
+    const weDays = mine.filter((a) => [5, 6, 0].includes(weWd(a.day))).map((a) => a.day).sort((x, y) => x - y);
+    expect(weDays).toEqual([3, 10]); // exactement ses G+ de week-end, rien de plus
   });
 });
