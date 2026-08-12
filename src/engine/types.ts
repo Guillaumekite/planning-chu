@@ -62,6 +62,10 @@ export interface GardeInput {
   weeklyExpected?: Record<DoctorId, number[][]>;
   /** Per doctor: full-time-equivalent fraction (0-1). Part-timers get proportionally fewer gardes. Default 1. */
   fte?: Record<DoctorId, number>;
+  /** Médecins présents ≥ 8 jours ouvrés dans le mois : au moins 2 gardes chacun (souple —
+   * si les disponibilités l'empêchent, on fait le maximum et on avertit l'admin). Allège
+   * mécaniquement ceux qui ont le plus de gardes et de week-ends. */
+  minTwo?: DoctorId[];
   /** Doctors that must ALWAYS be G2 (never G1) when on garde — e.g. the acupuncture doctor. */
   forceG2?: DoctorId[];
   weights?: Partial<GardeWeights>;
