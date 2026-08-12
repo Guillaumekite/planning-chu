@@ -81,6 +81,9 @@ export interface PlanningInput {
   carryCount?: Record<DoctorId, number>;
   carryHeavy?: Record<DoctorId, number>;
   carryWeekend?: Record<DoctorId, number>;
+  /** Jours travaillés du mois publié précédent par médecin — transforme le carry en RATIO
+   * gardes/jours travaillés, correction bornée à ±1 garde (spec §1.3). */
+  carryWorked?: Record<DoctorId, number>;
   /** Médecins de garde le dernier jour du mois calendaire JUSTE précédent (déjà publié).
    * Reçoivent un RS le 1er du mois, et sont bloqués de garde le 1 et le 2 (règle de repos
    * inter-mois : garde le dernier jour → RS le 1er → 2 encore interdit → 1re garde possible le 3).
@@ -343,6 +346,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     gardeBlocked, holidays: input.holidays, wishes, fte: gardeWeight, weeklyExpected,
     // Cross-month equity: last published month's counters relieve whoever was overloaded.
     carryCount: input.carryCount, carryHeavy: input.carryHeavy, carryWeekend: input.carryWeekend,
+    carryWorked: input.carryWorked,
     // "Jamais G1" doctors (Dzierzek) + acupuncture doctors are ALWAYS G2 — role balancer rule.
     forceG2: [...neverG1],
   };

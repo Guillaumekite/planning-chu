@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { solvePlanning } from '@/engine/planning';
 import { getLatestPublishedBefore } from '@/lib/plannings';
 import { carryGardeLastDay } from '@/lib/carryRs';
+import { workedDaysFromGrid } from '@/lib/carryWorked';
 
 // The GLPK solver is native (WASM) → this route must run on the Node.js runtime.
 export const runtime = 'nodejs';
@@ -91,6 +92,8 @@ export async function POST(req: Request) {
       carryCount: prevEq.count,
       carryHeavy: prevEq.heavyCount,
       carryWeekend: prevEq.weekendCount,
+      // Jours travaillés du mois publié : le carry devient un ratio, borné ±1 (spec §1.3).
+      carryWorked: prev ? workedDaysFromGrid(prev.grid) : undefined,
       carryGardeLastDay: carriedRS,
     });
     return NextResponse.json(result);
