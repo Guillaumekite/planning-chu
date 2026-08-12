@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { solveGardes } from './gardes';
+import { solveGardes, computeGardeTargets } from './gardes';
 import { daysInMonth, buildMonth } from './calendar';
 import { mulberry32, randInt } from './rng';
 import { DEFAULT_WEIGHTS } from './types';
@@ -131,11 +131,13 @@ describe('solveGardes — equity', () => {
 
 describe('solveGardes — G+ wishes are hard & the monthly cap holds', () => {
   it('forces the garde for each wisher when ≤ 2 G+ land on the same day', async () => {
-    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [10], D06: [10] } });
+    // Jour 7 = mardi (un G+ de week-end restreindrait les WE du wisher — spec §1.2 — et
+    // déclencherait une relaxation légitime ; ici on teste le forçage pur, sans warning).
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [7], D06: [7] } });
     expect(res.status).toBe('feasible');
     if (res.status !== 'feasible') return;
-    const day10 = res.assignments.filter((a) => a.day === 10).map((a) => a.doctorId).sort();
-    expect(day10).toEqual(['D05', 'D06']);
+    const day7 = res.assignments.filter((a) => a.day === 7).map((a) => a.doctorId).sort();
+    expect(day7).toEqual(['D05', 'D06']);
     expect(res.warnings).toHaveLength(0);
   });
 
@@ -265,5 +267,119 @@ describe('solveGardes — determinism', () => {
     const a = await solveGardes(input);
     const b = await solveGardes(input);
     expect(JSON.stringify(a)).toEqual(JSON.stringify(b));
+  });
+});
+
+describe('computeGardeTargets — carry du mois précédent en ratio, borné ±1 (spec §1.3)', () => {
+  it('sans carry : part proportionnelle au poids', () => {
+    const t = computeGardeTargets(['a', 'b'], 60, { a: 1, b: 1 }, {}, {});
+    expect(t.a).toBeCloseTo(30);
+    expect(t.b).toBeCloseTo(30);
+  });
+
+  it('un médecin surchargé le mois dernier est soulagé d\'AU PLUS 1 garde', () => {
+    // a a fait 7 gardes en 20 jours travaillés, b 3 en 20 : gros déséquilibre passé,
+    // mais la correction est bornée : |cible − part| ≤ 1.
+    const t = computeGardeTargets(['a', 'b'], 60, { a: 1, b: 1 }, { a: 7, b: 3 }, { a: 20, b: 20 });
+    expect(t.a).toBeGreaterThanOrEqual(29);
+    expect(t.a).toBeLessThan(30);
+    expect(t.b).toBeGreaterThan(30);
+    expect(t.b).toBeLessThanOrEqual(31);
+  });
+
+  it('le ratio compte, pas le brut : moins de gardes parce que moins présent ⇒ pas de rattrapage', () => {
+    // a : 3 gardes / 10 jours travaillés (ratio 0.3) ; b : 6 / 20 (ratio 0.3) — même ratio ⇒ corrections ~0.
+    const t = computeGardeTargets(['a', 'b'], 60, { a: 1, b: 1 }, { a: 3, b: 6 }, { a: 10, b: 20 });
+    expect(Math.abs(t.a - 30)).toBeLessThan(0.5);
+    expect(Math.abs(t.b - 30)).toBeLessThan(0.5);
+  });
+
+  it('un nouveau médecin (aucune donnée du mois précédent) reste neutre : cible = sa part', () => {
+    const t = computeGardeTargets(['a', 'b', 'neuf'], 60, { a: 1, b: 1, neuf: 1 }, { a: 5, b: 3 }, { a: 20, b: 20 });
+    expect(Math.abs(t.neuf - 20)).toBeLessThanOrEqual(0.01);
+  });
+});
+
+describe('solveGardes — cap souple 6 et équité portée par le MILP (spec §1.3)', () => {
+  it('personne au-dessus de 6 gardes quand l\'effectif suffit (11 médecins, 31 jours)', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(11) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    for (const c of Object.values(res.equity.count)) expect(c).toBeLessThanOrEqual(6);
+    const cs = Object.values(res.equity.count);
+    expect(Math.max(...cs) - Math.min(...cs)).toBeLessThanOrEqual(1); // équité dès le solveur
+    expect(res.warnings.some((w) => w.includes('montent à 7'))).toBe(false);
+  });
+
+  it('monte à 7 UNIQUEMENT si nécessaire, avec avertissement (9 médecins, 31 jours = 62 gardes)', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(9) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(Math.max(...Object.values(res.equity.count))).toBe(7);
+    expect(res.warnings.some((w) => w.includes('montent à 7'))).toBe(true);
+  });
+});
+
+describe('solveGardes — week-ends : jamais 2× le même jour, exception G+ (spec §1.2)', () => {
+  const weWd = (day: number) => new Date(Date.UTC(2026, 9, day)).getUTCDay(); // 5=ven, 6=sam, 0=dim
+
+  it('jamais deux vendredis, deux samedis ou deux dimanches pour le même médecin', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(12) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const perDocWd = new Map<string, Map<number, number>>();
+    for (const a of res.assignments) {
+      const wd = weWd(a.day);
+      if (![5, 6, 0].includes(wd)) continue;
+      const m = perDocWd.get(a.doctorId) ?? new Map<number, number>();
+      m.set(wd, (m.get(wd) ?? 0) + 1);
+      perDocWd.set(a.doctorId, m);
+    }
+    for (const m of perDocWd.values()) for (const n of m.values()) expect(n).toBeLessThanOrEqual(1);
+  });
+
+  it('G+ sur 2 samedis : accordés, et AUCUNE autre garde de week-end ajoutée à ce médecin', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(12), wishes: { D01: [3, 10] } });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const mine = res.assignments.filter((a) => a.doctorId === 'D01');
+    expect(mine.some((a) => a.day === 3)).toBe(true);
+    expect(mine.some((a) => a.day === 10)).toBe(true);
+    const weDays = mine.filter((a) => [5, 6, 0].includes(weWd(a.day))).map((a) => a.day).sort((x, y) => x - y);
+    expect(weDays).toEqual([3, 10]); // exactement ses G+ de week-end, rien de plus
+  });
+});
+
+describe('solveGardes — espacement et couverture hebdomadaire (spec §1.3)', () => {
+  it('14 médecins pleinement présents : chaque semaine complète travaillée contient une garde', async () => {
+    const ds = doctors(14);
+    const weeks = [
+      [5, 6, 7, 8, 9, 10, 11],
+      [12, 13, 14, 15, 16, 17, 18],
+      [19, 20, 21, 22, 23, 24, 25],
+    ]; // oct. 2026 : lundis 5, 12, 19 — 3 semaines lun→dim entières
+    const weeklyExpected = Object.fromEntries(ds.map((d) => [d, weeks]));
+    const res = await solveGardes({ year: 2026, month: 10, doctors: ds, weeklyExpected });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const byDoc = new Map(ds.map((d) => [d, new Set<number>()]));
+    for (const a of res.assignments) byDoc.get(a.doctorId)!.add(a.day);
+    let missed = 0;
+    for (const d of ds) for (const wk of weeks) if (!wk.some((day) => byDoc.get(d)!.has(day))) missed++;
+    // 14 médecins × 3 semaines = 42 gardes attendues pour 42 places (14 j × 2 + bords) : zéro raté.
+    expect(missed).toBe(0);
+  });
+
+  it('écart maximal entre 2 gardes consécutives d\'un médecin ≤ 2× l\'écart idéal', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(10) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const byDoc: Record<string, number[]> = {};
+    for (const a of res.assignments) (byDoc[a.doctorId] ??= []).push(a.day);
+    for (const ds2 of Object.values(byDoc)) {
+      ds2.sort((x, y) => x - y);
+      const ideal = 31 / (ds2.length + 1);
+      for (let i = 1; i < ds2.length; i++) expect(ds2[i] - ds2[i - 1]).toBeLessThanOrEqual(Math.ceil(2 * ideal));
+    }
   });
 });

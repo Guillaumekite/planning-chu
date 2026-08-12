@@ -45,12 +45,21 @@ export interface GardeInput {
   gardeBlocked?: Record<DoctorId, number[]>;
   /** Per doctor: cumulative garde COUNT from previous months (count fairness across months). */
   carryCount?: Record<DoctorId, number>;
+  /** Per doctor: WORKED-day count of the previous published month. Turns the carry into a
+   * RATIO (gardes/jours travaillés) so a doctor with few gardes because they were absent is
+   * not wrongly "caught up". The resulting correction is bounded to ±1 garde (spec §1.3). */
+  carryWorked?: Record<DoctorId, number>;
   /** Per doctor: cumulative "heavy" (Thu→Sun) garde count from previous months. */
   carryHeavy?: Record<DoctorId, number>;
   /** Per doctor: cumulative weekend (Fri/Sat/Sun) garde count from previous months (WE rotation). */
   carryWeekend?: Record<DoctorId, number>;
   /** Per doctor: days (1-based) the doctor explicitly WISHES a garde (garde svp). */
   wishes?: Record<DoctorId, number[]>;
+  /** Per doctor: semaines complètes travaillées (chaque semaine = jours lun→dim, 1-based) où
+   * UNE garde est attendue (spec §1.3 « une garde par semaine travaillée »). Le solveur et la
+   * recherche locale pénalisent chaque semaine attendue sans garde ; les manques restants
+   * ressortent en anomalies côté planning. */
+  weeklyExpected?: Record<DoctorId, number[][]>;
   /** Per doctor: full-time-equivalent fraction (0-1). Part-timers get proportionally fewer gardes. Default 1. */
   fte?: Record<DoctorId, number>;
   /** Doctors that must ALWAYS be G2 (never G1) when on garde — e.g. the acupuncture doctor. */
