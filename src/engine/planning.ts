@@ -463,8 +463,12 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // automatiquement jusqu'au ratio du profil (spec §2 — les jours déclarés comptent dans le
   // total, l'algo complète le reste ; le bug « déclaré ⇒ plus d'auto-complétion » est corrigé).
   // Les jours ajoutés privilégient les jours à fort effectif (ceux qui partiraient en HC).
-  // Skipped in July/August (academic break).
+  // Skipped in July/August (academic break). Le déficit restant après cette passe peut encore
+  // être comblé pendant la Pass 3 : les sièges HC d'un jour à surplus deviennent des jours U
+  // (accord du 12/08) — l'avertissement « complétion partielle » n'est donc émis qu'à la fin.
   const isAcademicBreak = input.month === 7 || input.month === 8;
+  const uTarget: Record<DoctorId, number> = {};
+  const uCount: Record<DoctorId, number> = {};
   if (!isAcademicBreak) {
     for (const doc of doctors) {
       const prof = input.profiles?.[doc];
@@ -480,12 +484,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       const kAuto = Math.max(0, kTotal - declaredPlaced);
       const chosen = pickUnivDays(candidates, kAuto, workingCount);
       for (const day of chosen) grid[doc][day] = 'U';
-      if (chosen.length < kAuto) {
-        warnings.push(
-          `Complétion Univ partielle pour ${doc} : ${declaredPlaced + chosen.length} jours U posés ` +
-            `sur un objectif de ${kTotal} (effectif insuffisant certains jours).`,
-        );
-      }
+      uTarget[doc] = kTotal;
+      uCount[doc] = declaredPlaced + chosen.length;
     }
   }
 
@@ -683,6 +683,18 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
         lastHcDay[doc] = cd.day;
         hcToday -= 1;
       };
+      // Universitaire sous son ratio présent un jour à surplus : son siège HC devient un jour
+      // U (accord du 12/08 — le ratio prime sur la régularité). Le déficit le plus grand passe
+      // en premier ; les candidats protégés (seul CD/P possible) restent sur leur poste.
+      const univNeedy = pool
+        .filter((d) => (uTarget[d] ?? 0) > (uCount[d] ?? 0) && !protectedDocs.has(d))
+        .sort((a, b) => (uTarget[b] - uCount[b]) - (uTarget[a] - uCount[a]) || rot(a) - rot(b));
+      for (const doc of univNeedy.slice(0, hcToday)) {
+        grid[doc][cd.day] = 'U';
+        uCount[doc] += 1;
+        pool = pool.filter((d) => d !== doc);
+        hcToday -= 1;
+      }
       // L'anti-série est un FILTRE (pas un simple départage) : on ne repêche un médecin déjà
       // en HC la veille que si les candidats « frais » ne suffisent pas à remplir la journée.
       const eligible = pool.filter((d) => !noHC.has(d) && !protectedDocs.has(d));
@@ -841,6 +853,17 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       if (hcCount > 0 && working <= 10) {
         warnings.push(`Contrôle du ${cd.day} : ${hcCount} HC alors que seulement ${working} travaillants — surplus inattendu (1er du mois sans RS ?).`);
       }
+    }
+  }
+
+  // Complétion Univ : bilan APRÈS la Pass 3 — les conversions HC→U ont pu combler le déficit
+  // laissé par le placement classique ; on n'avertit que sur le manque réellement restant.
+  for (const doc of Object.keys(uTarget)) {
+    if ((uCount[doc] ?? 0) < uTarget[doc]) {
+      warnings.push(
+        `Complétion Univ partielle pour ${doc} : ${uCount[doc]} jours U posés sur un objectif ` +
+          `de ${uTarget[doc]} (effectif insuffisant certains jours).`,
+      );
     }
   }
 
