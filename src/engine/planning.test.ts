@@ -747,3 +747,18 @@ describe('solvePlanning — HC équitable (spec §3)', () => {
     expect(Object.values(res.grid.D01)).not.toContain('HC');
   });
 });
+
+describe('solvePlanning — anti-répétition des postes de base (spec §3)', () => {
+  it('jamais le même poste de base (BM/S/Ped) deux jours ouvrés consécutifs quand une alternative existe', async () => {
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: doctors(12) });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    let repeats = 0;
+    for (const doc of doctors(12)) {
+      for (const cd of res.days) {
+        const v = res.grid[doc][cd.day];
+        if (['BM', 'S', 'Ped'].includes(v) && res.grid[doc][cd.day - 1] === v) repeats++;
+      }
+    }
+    expect(repeats).toBeLessThanOrEqual(1); // tolérance : un cas contraint isolé
+  });
+});

@@ -593,6 +593,10 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       [...(candidates ?? pool)].sort((a, b) => {
         const ca = postCount[a][post] ?? 0, cb = postCount[b][post] ?? 0;
         if (ca !== cb) return ca - cb;
+        // Anti-répétition (spec §3.3) : pas le même poste que la veille quand une alternative existe.
+        const ra = grid[a][cd.day - 1] === post ? 1 : 0;
+        const rb = grid[b][cd.day - 1] === post ? 1 : 0;
+        if (ra !== rb) return ra - rb;
         if (totalPosts[a] !== totalPosts[b]) return totalPosts[a] - totalPosts[b];
         return rot(a) - rot(b);
       })[0];
