@@ -144,3 +144,26 @@ Chaque jour ouvré :
 - Anti-répétition : pas deux fois le même poste de base deux jours de suite quand une
   alternative existe.
 - Déterminisme : même entrée ⇒ même planning (aucune horloge, RNG seedé inchangé).
+
+---
+
+## Addendum (2026-08-12) — deux règles validées après la PR initiale
+
+### A. Minimum 2 gardes pour les présents ≥ 8 jours
+Tout médecin présent ≥ 8 jours ouvrés (hors congé, hors jour off TP) reçoit **au moins
+2 gardes** dans le mois — l'allègement des plus chargés (gardes et week-ends) passe par là.
+Souple : si les disponibilités l'empêchent (moins de 2 jours gardables, ou trop rapprochés),
+l'algo fait le maximum et **avertit l'admin**. Exemption si G−/blocage rend toute garde
+impossible. Les gardes issues d'un G+ restent inamovibles : le rééquilibrage ne joue que sur
+les gardes libres.
+
+### B. Sièges HC → jours U pour les universitaires
+Un universitaire **sous son ratio** présent un jour à surplus prend le siège HC en **U**
+au lieu d'un HC (le ratio prime sur la régularité des jours U — décision explicite).
+Le placement classique (jours à fort effectif, garde-fou du cœur) reste la première passe ;
+la conversion HC→U comble le déficit restant pendant la Pass 3 ; l'avertissement
+« complétion partielle » n'est émis qu'en toute fin, sur le manque réellement restant.
+
+Tests : cibles minTwo (2 gardes atteintes / impossible ⇒ 1 + warning), intégration G−,
+scénario de complétion bloquée (garde-fou ≥ 9) comblé par conversion, invariant « un
+universitaire sous son objectif ne reçoit jamais de HC ».
