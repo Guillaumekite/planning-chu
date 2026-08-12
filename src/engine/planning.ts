@@ -319,6 +319,18 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     gardeWeight[doc] = fte[doc] * ((totalDays - nonTpBlocked.size) / totalDays);
   }
 
+  // Minimum 2 gardes : tout médecin présent ≥ 8 jours ouvrés (hors congé, hors jour off TP)
+  // doit recevoir au moins 2 gardes — cela allège mécaniquement les plus chargés (gardes et
+  // week-ends). Exempté s'il n'a pas au moins 2 jours gardables (ex. G− partout) ; si le
+  // solveur ne peut pas faire 2, il fait le maximum et avertit l'admin.
+  const minTwo = doctors.filter((doc) => {
+    const presenceWeekdays = days.filter(
+      (cd) => !cd.isWeekend && !cd.isHoliday && PRESENT(avail(input, doc, cd.day)) && !tpDays[doc].has(cd.day),
+    ).length;
+    if (presenceWeekdays < 8) return false;
+    return days.length - (gardeBlocked[doc]?.length ?? 0) >= 2;
+  });
+
   // Semaines complètes travaillées (spec §1.3 « une garde par semaine ») : semaine calendaire
   // lun→dim entièrement dans le mois, où le médecin est présent tous les jours ouvrés (ni congé
   // ni jour off TP) ET peut prendre au moins une garde dans la semaine (exception : G− — ou
@@ -343,7 +355,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
   const gardeInput: GardeInput = {
     year: input.year, month: input.month, doctors,
-    gardeBlocked, holidays: input.holidays, wishes, fte: gardeWeight, weeklyExpected,
+    gardeBlocked, holidays: input.holidays, wishes, fte: gardeWeight, weeklyExpected, minTwo,
     // Cross-month equity: last published month's counters relieve whoever was overloaded.
     carryCount: input.carryCount, carryHeavy: input.carryHeavy, carryWeekend: input.carryWeekend,
     carryWorked: input.carryWorked,

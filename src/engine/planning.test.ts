@@ -762,3 +762,15 @@ describe('solvePlanning — anti-répétition des postes de base (spec §3)', ()
     expect(repeats).toBeLessThanOrEqual(1); // tolérance : un cas contraint isolé
   });
 });
+
+describe('solvePlanning — minimum 2 gardes pour les présents ≥ 8 jours', () => {
+  it('un médecin en G− presque partout (mais présent) garde ses 2 gardes sur ses jours gardables', async () => {
+    // D01 travaille tout le mois mais n'est gardable que les 6, 13, 20, 27 (4 lundis d'avril 2026).
+    const availD01: Record<number, 'no_garde'> = {};
+    for (let d = 1; d <= 30; d++) if (![6, 13, 20, 27].includes(d)) availD01[d] = 'no_garde';
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: doctors(14), availability: { D01: availD01 } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const gardes = res.days.filter((cd) => ['G1', 'G2'].includes(res.grid.D01[cd.day] ?? '')).length;
+    expect(gardes).toBeGreaterThanOrEqual(2);
+  });
+});

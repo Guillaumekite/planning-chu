@@ -290,7 +290,7 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   const assigned: DoctorId[][] = days.map((cd) =>
     doctors.filter((doc) => !isBlocked(cd.day, doc) && feasible[gv(cd.day, doc)]),
   );
-  polishEquity(days, doctors, assigned, blocked, targets, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2, input.weeklyExpected ?? {});
+  polishEquity(days, doctors, assigned, blocked, targets, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2, input.weeklyExpected ?? {}, new Set(input.minTwo ?? []));
 
   // ---- Build result ----
   const count: Record<DoctorId, number> = {};
@@ -320,6 +320,16 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
       if (heavy) heavyCount[doc] += 1;
     }
   });
+
+  // minTwo non atteint (indisponibilités trop serrées) : on a fait le maximum, l'admin le voit.
+  for (const doc of input.minTwo ?? []) {
+    if ((count[doc] ?? 0) < 2) {
+      warnings.push(
+        `${doc} est présent au moins 8 jours ce mois-ci mais n'a que ${count[doc] ?? 0} garde(s) — ` +
+          `impossible de faire mieux avec ses disponibilités (jours gardables trop rares ou trop rapprochés).`,
+      );
+    }
+  }
 
   const cumulativeCount: Record<DoctorId, number> = {};
   const cumulativeHeavy: Record<DoctorId, number> = {};
@@ -608,6 +618,15 @@ async function solveFeasibility(
       }
     }
   }
+  // Minimum 2 gardes pour les présents ≥ 8 jours (minTwo) : contrainte souple fortement
+  // pénalisée — Σ gardes + slack ≥ 2. Les G+ forcés restent intouchables ; l'allègement des
+  // plus chargés passe par les gardes libres uniquement.
+  for (const doc of input.minTwo ?? []) {
+    if (!docVars[doc] || docVars[doc].length === 0) continue;
+    const slack = `min2_${doc}`;
+    subjectTo.push({ name: `min2row_${doc}`, vars: [...docVars[doc], { name: slack, coef: 1 }], bnds: { type: glpk.GLP_LO, lb: 2, ub: 0 } });
+    objVars.push({ name: slack, coef: 10 });
+  }
   // Couverture hebdomadaire (spec §1.3) : pour chaque semaine complète travaillée d'un médecin,
   // Σ gardes de la semaine + slack ≥ 1 — le slack (pénalisé) rend la règle souple : le solveur
   // couvre chaque semaine attendue quand c'est faisable, sinon l'anomalie ressort côté planning.
@@ -666,6 +685,7 @@ function polishEquity(
   plan: WishPlan,
   forceG2: Set<DoctorId>,
   weeklyExpected: Record<DoctorId, number[][]>,
+  minTwo: Set<DoctorId>,
 ) {
   const isBlocked = (d: number, doc: DoctorId) => (blocked[doc] ?? []).includes(d);
   const dayList: Record<DoctorId, Set<number>> = {};
@@ -847,6 +867,7 @@ function polishEquity(
       const we = isGardeWeekend(cd);
       for (const a of assigned[di]) {
         if (plan.forced.has(`${cd.day}|${a}`)) continue; // a forced G+ garde never moves
+        if (minTwo.has(a) && monthCount[a] <= 2) continue; // jamais sous 2 gardes pour un présent ≥ 8 j
         for (const b of doctors) {
           if (b === a) continue;
           if (assigned[di].includes(b)) continue;
