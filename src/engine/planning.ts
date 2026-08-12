@@ -558,8 +558,12 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const cs2Cnt: Record<DoctorId, number> = {};
   const lastCsDay: Record<DoctorId, number> = {};
   const presWeekdays: Record<DoctorId, number> = {};
+  // HC equity state (spec §3) : compteur mensuel proraté sur les jours de présence + anti-série.
+  const hcCnt: Record<DoctorId, number> = {};
+  const lastHcDay: Record<DoctorId, number> = {};
   for (const doc of doctors) {
     csTotal[doc] = 0; cs1Cnt[doc] = 0; cs2Cnt[doc] = 0; lastCsDay[doc] = -9;
+    hcCnt[doc] = 0; lastHcDay[doc] = -9;
     presWeekdays[doc] = days.filter(
       (cd) => !cd.isWeekend && !cd.isHoliday && isWorking(doc, cd.day) && !compOff.has(`${doc}|${cd.day}`),
     ).length;
@@ -612,6 +616,65 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     // those days, none on Tuesday). The ≥10 extra below still adds a plain BM.
     const coreRest: string[] = ['BM', PED_DAYS.has(cd.weekday) ? 'Ped' : 'BM'];
 
+    // Maternité trigger (utilisé par le plan HC ci-dessous ET l'extra MM/MS plus bas).
+    const g = gardeByDay[cd.day] ?? {};
+    const acuOnGarde = [g.G1, g.G2].some((d) => d && acuDocs.has(d));
+
+    // --- Spec §3 : on choisit d'abord QUI part en HC, ensuite on distribue les postes ---
+    // (l'ancien « HC = le reste » concentrait les HC sur les mêmes personnes plusieurs jours
+    // d'affilée). Sélection par équité : plus faible compteur HC proraté sur la présence,
+    // jamais deux jours de suite si évitable, profils « Jamais HC » exclus, et les candidats
+    // uniques d'un poste réservé qui va tourner (CD, P) sont protégés.
+    const cdSorted = pool
+      .filter((doc) => douleurPoids[doc] >= 1)
+      .sort((a, b) => {
+        const ra = (postCount[a]['CD'] ?? 0) / douleurPoids[a];
+        const rb = (postCount[b]['CD'] ?? 0) / douleurPoids[b];
+        return ra !== rb ? ra - rb : rot(a) - rot(b);
+      });
+    const extrasPlanned = (() => {
+      let b = pool.length - coreFirst.length - coreRest.length - csSlots;
+      let n = 0;
+      if (b > 0 && working >= 10) { n++; b--; } // 3e BM
+      if (b > 0 && working >= 11 && cdSorted.length) { n++; b--; } // CD
+      if (b > 0 && working >= 12 && pool.some((d) => presenceDocs.has(d))) { n++; b--; } // P
+      if (b > 0 && working >= 12 && acuOnGarde) { n++; b--; } // MM/MS
+      return n;
+    })();
+    let hcToday = Math.max(0, pool.length - (coreFirst.length + coreRest.length + csSlots + extrasPlanned));
+    if (hcToday > 0) {
+      const pCand = pool.filter((d) => presenceDocs.has(d));
+      const protectedDocs = new Set<DoctorId>();
+      if (working >= 11 && cdSorted.length) protectedDocs.add(cdSorted[0]); // le CD du jour
+      if (working >= 12 && pCand.length === 1) protectedDocs.add(pCand[0]); // seul P possible
+      const hcSort = (arr: DoctorId[]) => [...arr].sort((a, b) => {
+        const ra = hcCnt[a] / Math.max(presWeekdays[a], 1);
+        const rb = hcCnt[b] / Math.max(presWeekdays[b], 1);
+        if (ra !== rb) return ra - rb; // équité prorata d'abord
+        const sa = lastHcDay[a] === cd.day - 1 ? 1 : 0;
+        const sb = lastHcDay[b] === cd.day - 1 ? 1 : 0;
+        if (sa !== sb) return sa - sb; // puis anti-série
+        if (totalPosts[a] !== totalPosts[b]) return totalPosts[b] - totalPosts[a]; // le plus chargé souffle
+        return rot(a) - rot(b);
+      });
+      const takeHc = (doc: DoctorId) => {
+        assign(doc, 'HC');
+        hcCnt[doc] += 1;
+        lastHcDay[doc] = cd.day;
+        hcToday -= 1;
+      };
+      // L'anti-série est un FILTRE (pas un simple départage) : on ne repêche un médecin déjà
+      // en HC la veille que si les candidats « frais » ne suffisent pas à remplir la journée.
+      const eligible = pool.filter((d) => !noHC.has(d) && !protectedDocs.has(d));
+      for (const doc of hcSort(eligible.filter((d) => lastHcDay[d] !== cd.day - 1)).slice(0, hcToday)) takeHc(doc);
+      for (const doc of hcSort(eligible.filter((d) => lastHcDay[d] === cd.day - 1)).slice(0, hcToday)) takeHc(doc);
+      // Dernier recours : tous les restants sont « Jamais HC »/protégés — avertir, ne pas planter.
+      for (const doc of hcSort(pool.filter((d) => !protectedDocs.has(d))).slice(0, hcToday)) {
+        warnings.push(`HC attribué à ${doc} le ${cd.day} malgré « Jamais HC » (aucun autre médecin disponible).`);
+        takeHc(doc);
+      }
+    }
+
     // Extras ladder — only with spare capacity beyond the core AND the CS slots.
     let budget = pool.length - coreFirst.length - coreRest.length - csSlots;
     if (budget > 0 && working >= 10) {
@@ -639,8 +702,6 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     }
     // Maternité : UNIQUEMENT quand le médecin acupuncture (Dzierzek) est de garde ce jour ET
     // ≥ 12 travaillants. 'MS' (couverture jusqu'à 18h) si sa garde suit un ACU en journée, sinon 'MM'.
-    const g = gardeByDay[cd.day] ?? {};
-    const acuOnGarde = [g.G1, g.G2].some((d) => d && acuDocs.has(d));
     if (budget > 0 && acuOnGarde && working >= 12) {
       const post = acuG2Days.has(cd.day) ? 'MS' : 'MM';
       const doc = leastFor(post);
@@ -730,8 +791,14 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       const doc = leastFor(post);
       if (doc) assign(doc, post);
     }
+    // Filet de sécurité : en régime normal le pool est vide ici (les HC ont été choisis en
+    // tête de journée) — un reliquat signale un extra non pourvu, il part en HC compté.
     const hcCount = pool.length;
-    for (const doc of [...pool]) assign(doc, 'HC');
+    for (const doc of [...pool]) {
+      assign(doc, 'HC');
+      hcCnt[doc] += 1;
+      lastHcDay[doc] = cd.day;
+    }
 
     // Self-check: verify the day's MINIMUM posts against its working count and warn about any
     // gap — a counting bug must show up in the amber banner, never as a silently wrong grid.

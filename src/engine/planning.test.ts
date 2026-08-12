@@ -716,3 +716,34 @@ describe('solvePlanning — complétion Univ au ratio (cas Gravero, spec §2)', 
     expect(res.warnings.filter((w) => w.startsWith('Contrôle du'))).toEqual([]);
   });
 });
+
+describe('solvePlanning — HC équitable (spec §3)', () => {
+  it('l\'HC tourne : écart max−min ≤ 2 sur le mois, jamais 2 jours d\'affilée', async () => {
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: doctors(15) });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const hc: Record<string, number> = {};
+    let streaks = 0;
+    for (const doc of doctors(15)) {
+      let prev = -9;
+      hc[doc] = 0;
+      for (const cd of res.days) {
+        if (res.grid[doc][cd.day] !== 'HC') continue;
+        hc[doc]++;
+        if (cd.day === prev + 1) streaks++;
+        prev = cd.day;
+      }
+    }
+    const vals = Object.values(hc);
+    expect(Math.max(...vals) - Math.min(...vals)).toBeLessThanOrEqual(2);
+    expect(streaks).toBe(0);
+  });
+
+  it('« Jamais HC » : le médecin coché n\'a aucun HC', async () => {
+    const res = await solvePlanning({
+      year: 2026, month: 10, doctors: doctors(15),
+      profiles: { D01: { noHC: true } },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(Object.values(res.grid.D01)).not.toContain('HC');
+  });
+});
