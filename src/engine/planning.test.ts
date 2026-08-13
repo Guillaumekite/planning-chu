@@ -762,3 +762,50 @@ describe('solvePlanning — anti-répétition des postes de base (spec §3)', ()
     expect(repeats).toBeLessThanOrEqual(1); // tolérance : un cas contraint isolé
   });
 });
+
+describe('solvePlanning — minimum 2 gardes pour les présents ≥ 8 jours', () => {
+  it('un médecin en G− presque partout (mais présent) garde ses 2 gardes sur ses jours gardables', async () => {
+    // D01 travaille tout le mois mais n'est gardable que les 6, 13, 20, 27 (4 lundis d'avril 2026).
+    const availD01: Record<number, 'no_garde'> = {};
+    for (let d = 1; d <= 30; d++) if (![6, 13, 20, 27].includes(d)) availD01[d] = 'no_garde';
+    const res = await solvePlanning({ year: 2026, month: 4, doctors: doctors(14), availability: { D01: availD01 } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const gardes = res.days.filter((cd) => ['G1', 'G2'].includes(res.grid.D01[cd.day] ?? '')).length;
+    expect(gardes).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('solvePlanning — les sièges HC deviennent des jours U pour les universitaires (accord 12/08)', () => {
+  it('quand la complétion classique est bloquée, les jours à surplus (HC) complètent le ratio', async () => {
+    // 15 médecins, mais D09→D15 en congé sur tous les jours ouvrés du 1 au 21 : ces jours-là
+    // 8 présents seulement → le garde-fou (≥ 9) interdit d'y poser des U automatiques.
+    // Le ratio de D01 ne peut se compléter que sur les jours 22-30, où l'effectif plein (15)
+    // génère du surplus (HC) : ces sièges doivent devenir des jours U.
+    const conge: Record<number, 'conge'> = {};
+    for (const d of [1, 2, 3, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17, 20, 21]) conge[d] = 'conge';
+    const availability: Record<string, Record<number, 'conge'>> = {};
+    for (const doc of ['D09', 'D10', 'D11', 'D12', 'D13', 'D14', 'D15']) availability[doc] = conge;
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: doctors(15),
+      profiles: { D01: { universitaire: true, universityRatio: 50 } },
+      availability,
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.warnings.some((w) => w.includes('Complétion Univ partielle pour D01'))).toBe(false);
+    const uDays = res.days.filter((cd) => (res.grid.D01[cd.day] ?? '').startsWith('U')).length;
+    expect(uDays).toBeGreaterThanOrEqual(6); // ~50 % de ses jours assignables, malgré le blocage 1-21
+  });
+
+  it('invariant : un universitaire sous son objectif U ne reçoit jamais de HC', async () => {
+    const res = await solvePlanning({
+      year: 2026, month: 10, doctors: doctors(15),
+      profiles: { D01: { universitaire: true, universityRatio: 50 } },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const cells = res.days.map((cd) => res.grid.D01[cd.day] ?? '');
+    const uDays = cells.filter((v) => v.startsWith('U')).length;
+    const base = cells.filter((v) => v && !['G1', 'G2', 'RS', 'CA'].includes(v)).length; // U + postes + HC
+    const target = Math.round(0.5 * base);
+    if (cells.includes('HC')) expect(uDays).toBeGreaterThanOrEqual(target);
+  });
+});

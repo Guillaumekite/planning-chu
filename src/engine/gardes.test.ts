@@ -383,3 +383,30 @@ describe('solveGardes — espacement et couverture hebdomadaire (spec §1.3)', (
     }
   });
 });
+
+describe('solveGardes — minimum 2 gardes pour les présents ≥ 8 jours (minTwo)', () => {
+  it('un médecin peu disponible mais présent reçoit au moins 2 gardes quand c\'est possible', async () => {
+    // D01 gardable seulement les 5, 10, 15, 20 (4 jours espacés) — sa part proportionnelle
+    // serait ~1 garde ; minTwo le remonte à 2 pour alléger les plus chargés.
+    const docs = doctors(18);
+    const gardeBlocked: Record<string, number[]> = {
+      D01: Array.from({ length: 30 }, (_, i) => i + 1).filter((d) => ![5, 10, 15, 20].includes(d)),
+    };
+    const res = await solveGardes({ year: 2026, month: 4, doctors: docs, gardeBlocked, minTwo: ['D01'] });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(res.equity.count.D01).toBeGreaterThanOrEqual(2);
+  });
+
+  it('2 gardes impossibles (2 jours gardables trop rapprochés) : 1 garde + avertissement, pas de blocage', async () => {
+    const docs = doctors(18);
+    const gardeBlocked: Record<string, number[]> = {
+      D01: Array.from({ length: 30 }, (_, i) => i + 1).filter((d) => ![10, 11].includes(d)),
+    };
+    const res = await solveGardes({ year: 2026, month: 4, doctors: docs, gardeBlocked, minTwo: ['D01'] });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(res.equity.count.D01).toBe(1);
+    expect(res.warnings.some((w) => w.includes('D01') && w.includes('garde'))).toBe(true);
+  });
+});
