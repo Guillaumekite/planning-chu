@@ -71,6 +71,19 @@ export function saveAvailability(year: number, month: number, avail: MonthAvaila
   localStorage.setItem(AVAIL_KEY, JSON.stringify(all));
 }
 
+/**
+ * Bordure de la case pour les postes combinés « jour + garde du soir »
+ * (ex : 'ACU+G2', 'U+G1') : contour 2px à la couleur de la garde
+ * — rouge pour G1, orange pour G2 (mêmes couleurs que les gardes seules).
+ * Les autres cases gardent la bordure grise fine par défaut.
+ */
+export function gardeBorderStyle(post: string | undefined): string {
+  const evening = post?.split('+')[1];
+  if (evening === 'G1') return 'border-2 border-red-600';
+  if (evening === 'G2') return 'border-2 border-orange-500';
+  return 'border border-gray-100';
+}
+
 /** Tailwind classes for each post acronym, for the planning grid. */
 export function postStyle(post: string | undefined): string {
   if (post && post.startsWith('ACU')) return 'bg-lime-100 text-lime-700'; // 'ACU' or 'ACU+G2'
