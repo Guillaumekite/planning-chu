@@ -331,25 +331,29 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     return days.length - (gardeBlocked[doc]?.length ?? 0) >= 2;
   });
 
-  // Semaines complètes travaillées (spec §1.3 « une garde par semaine ») : semaine calendaire
-  // lun→dim entièrement dans le mois, où le médecin est présent tous les jours ouvrés (ni congé
-  // ni jour off TP) ET peut prendre au moins une garde dans la semaine (exception : G− — ou
-  // autre blocage — posé sur TOUTE la semaine). Sert au solveur (couverture) puis aux anomalies.
+  // « Une garde par semaine » généralisée (accord du 13/08) : toute semaine calendaire lun→dim
+  // où le médecin a AU MOINS 3 JOURS GARDABLES attend une garde — en ne comptant que les jours
+  // appartenant au mois (les semaines de bord comptent avec leurs seuls jours dans le mois).
+  // Jour gardable = ni congé, ni jour off TP, ni G−, ni autre blocage (veille d'Univ, RS
+  // inter-mois). Temps partiels exemptés : leur équité reste pro-rata (cible FTE), une attente
+  // hebdomadaire stricte les pousserait au niveau d'un temps plein. Sert au solveur (couverture
+  // pénalisée) puis aux anomalies du bandeau admin.
   const weeklyExpected: Record<DoctorId, number[][]> = {};
-  for (const cd of days) {
-    if (cd.weekday !== 0) continue; // lundi
-    const week = days.filter((x) => x.day >= cd.day && x.day < cd.day + 7);
-    if (week.length < 7) continue; // semaine tronquée par le bord du mois
-    const weekdaysOfWeek = week.filter((x) => !x.isWeekend && !x.isHoliday);
-    if (weekdaysOfWeek.length === 0) continue;
+  {
+    const weekSegments = new Map<number, number[]>();
+    for (const cd of days) {
+      const weekId = cd.day - cd.weekday; // jour-numéro du lundi de la semaine (≤ 0 en bord de mois)
+      if (!weekSegments.has(weekId)) weekSegments.set(weekId, []);
+      weekSegments.get(weekId)!.push(cd.day);
+    }
     for (const doc of doctors) {
-      const fullyWorked = weekdaysOfWeek.every(
-        (x) => PRESENT(avail(input, doc, x.day)) && !tpDays[doc].has(x.day),
-      );
-      if (!fullyWorked) continue;
+      if (fte[doc] < 1) continue; // TP : pas d'attente hebdomadaire stricte
       const blockedSet = new Set(gardeBlocked[doc] ?? []);
-      if (week.every((x) => blockedSet.has(x.day))) continue; // G−/blocage toute la semaine
-      (weeklyExpected[doc] ??= []).push(week.map((x) => x.day));
+      for (const weekId of [...weekSegments.keys()].sort((a, b) => a - b)) {
+        const week = weekSegments.get(weekId)!;
+        if (week.filter((d) => !blockedSet.has(d)).length < 3) continue;
+        (weeklyExpected[doc] ??= []).push(week);
+      }
     }
   }
 
@@ -377,7 +381,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   for (const doc of doctors) {
     for (const week of weeklyExpected[doc] ?? []) {
       if (week.some((d) => onGarde(doc, d))) continue;
-      warnings.push(`Anomalie : ${doc} travaille toute la semaine du ${week[0]} au ${week[week.length - 1]} sans garde.`);
+      warnings.push(`Anomalie : ${doc} a au moins 3 jours gardables la semaine du ${week[0]} au ${week[week.length - 1]} mais reste sans garde.`);
     }
   }
 
@@ -605,17 +609,19 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     // Fairness pick: fewest of THIS post, then lightest total Pass-3 load (so specialty doctors
     // don't also top the generic posts), then day-rotated deterministic order.
     const rot = (doc: DoctorId) => ((alphaIdx.get(doc) ?? 0) + cd.day) % doctors.length;
-    const leastFor = (post: string, candidates?: DoctorId[]): DoctorId | undefined =>
-      [...(candidates ?? pool)].sort((a, b) => {
+    const leastFor = (post: string, candidates?: DoctorId[]): DoctorId | undefined => {
+      const cands = [...(candidates ?? pool)];
+      // Anti-répétition (spec §3.3) en FILTRE : celui qui tenait ce poste la veille est écarté
+      // tant qu'une alternative existe (repli sinon) — le simple départage laissait passer les
+      // séries quand son compteur restait strictement le plus bas deux jours de suite.
+      const fresh = cands.filter((d) => grid[d][cd.day - 1] !== post);
+      return (fresh.length ? fresh : cands).sort((a, b) => {
         const ca = postCount[a][post] ?? 0, cb = postCount[b][post] ?? 0;
         if (ca !== cb) return ca - cb;
-        // Anti-répétition (spec §3.3) : pas le même poste que la veille quand une alternative existe.
-        const ra = grid[a][cd.day - 1] === post ? 1 : 0;
-        const rb = grid[b][cd.day - 1] === post ? 1 : 0;
-        if (ra !== rb) return ra - rb;
         if (totalPosts[a] !== totalPosts[b]) return totalPosts[a] - totalPosts[b];
         return rot(a) - rot(b);
       })[0];
+    };
 
     // How many CS slots today (2 at ≥ 9 working, 1 at 8), and which label lags for the
     // single-slot case (weekly balance first, monthly tie-break).
@@ -823,6 +829,38 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       const doc = leastFor(post);
       if (doc) assign(doc, post);
     }
+
+    // Réparation anti-répétition (spec §3.3) : les derniers postes du jour se choisissent dans
+    // un pool résiduel de 1-2 médecins — quand la répétition y était inévitable, on ÉCHANGE le
+    // poste avec un autre porteur de poste générique du jour qui, lui, ne répéterait pas.
+    const SWAPPABLE = new Set(['BM', 'Ped', 'S', 'HC']);
+    for (const doc of doctors) {
+      const post = grid[doc][cd.day] ?? '';
+      if (!['BM', 'Ped', 'S'].includes(post) || grid[doc][cd.day - 1] !== post) continue;
+      for (const other of doctors) {
+        if (other === doc) continue;
+        const op = grid[other][cd.day] ?? '';
+        if (!SWAPPABLE.has(op) || op === post) continue;
+        if (grid[other][cd.day - 1] === post) continue; // il répéterait ce poste à son tour
+        if (grid[doc][cd.day - 1] === op) continue; // doc répéterait l'autre poste
+        if (post === 'S' && noS.has(other)) continue;
+        if (op === 'S' && noS.has(doc)) continue;
+        if (op === 'HC' && noHC.has(doc)) continue;
+        grid[doc][cd.day] = op;
+        grid[other][cd.day] = post;
+        postCount[doc][post] = (postCount[doc][post] ?? 1) - 1;
+        postCount[doc][op] = (postCount[doc][op] ?? 0) + 1;
+        postCount[other][op] = (postCount[other][op] ?? 1) - 1;
+        postCount[other][post] = (postCount[other][post] ?? 0) + 1;
+        if (op === 'HC') {
+          hcCnt[doc] += 1;
+          lastHcDay[doc] = cd.day;
+          hcCnt[other] -= 1; // son HC du jour est annulé (lastHcDay reste prudent)
+        }
+        break;
+      }
+    }
+
     // Filet de sécurité : en régime normal le pool est vide ici (les HC ont été choisis en
     // tête de journée) — un reliquat signale un extra non pourvu, il part en HC compté.
     const hcCount = pool.length;
