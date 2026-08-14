@@ -1,7 +1,7 @@
 // src/components/PostCounterTable.tsx
 // Matrice postes × jours : nombre de médecins par poste, contrôle et motif.
 // Aligne ses colonnes-jours sous le PlanningGrid.
-import { WEEKDAYS_FR } from '@/lib/store';
+import { WEEKDAYS_FR, postLabel } from '@/lib/store';
 import { computePostCounter, type CounterDay } from '@/lib/garde-counter';
 
 export default function PostCounterTable({
@@ -32,7 +32,7 @@ export default function PostCounterTable({
           <tbody>
             {pc.posts.map((post) => (
               <tr key={post}>
-                <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium">{post}</td>
+                <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-3 py-1 text-left font-medium">{postLabel(post)}</td>
                 {days.map((d) => {
                   const n = pc.counts[d.day][post] ?? 0;
                   const bad = pc.flagged[d.day].has(post) || (post === 'CS1' || post === 'CS2' ? pc.flagged[d.day].has('CS') : false);

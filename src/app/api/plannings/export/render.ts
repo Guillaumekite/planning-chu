@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import type { PlanningRow } from '@/lib/plannings';
-import { MONTHS_FR, WEEKDAYS_FR } from '@/lib/store';
+import { MONTHS_FR, WEEKDAYS_FR, postLabel } from '@/lib/store';
 import { planningCell, type PlanningCell } from '@/lib/planning-cell';
 import { computePostCounter, POST_ROWS } from '@/lib/garde-counter';
 
@@ -26,7 +26,8 @@ function csvCell(weekday: number, raw: string | undefined): string {
   const extras: string[] = [];
   if (c.morning) extras.push(`matin: ${c.morning}`);
   if (c.afternoon) extras.push(`${c.afternoonKind === 'garde' ? 'soir' : 'aprem'}: ${c.afternoon}`);
-  return extras.length ? `${c.main} (${extras.join(', ')})`.trim() : c.main;
+  const main = postLabel(c.main);
+  return extras.length ? `${main} (${extras.join(', ')})`.trim() : main;
 }
 
 // Séparateur ';' + BOM UTF-8 : Excel FR ouvre correctement sans ré-import manuel.
@@ -42,7 +43,7 @@ export function toCsv(planning: PlanningRow, doctors: string[]): string {
   const pc = computePostCounter(planning.grid, planning.days);
   const counterHeader = ['Compteur des postes', ...dayCols].join(';');
   const counterRows = POST_ROWS.map((post) =>
-    [post, ...planning.days.map((d) => {
+    [postLabel(post), ...planning.days.map((d) => {
       const n = pc.counts[d.day][post] ?? 0;
       const bad = pc.flagged[d.day].has(post) || ((post === 'CS1' || post === 'CS2') && pc.flagged[d.day].has('CS'));
       return `${n}${bad ? '!' : ''}`;
@@ -84,7 +85,7 @@ const GARDE_ANNOT_FONT = { size: 8, bold: true, color: { argb: RED } } as const;
 const G1_BORDER = 'FFCC0000'; // rouge
 const G2_BORDER = 'FFF97316'; // orange
 function gardeBorder(argb: string): Partial<ExcelJS.Borders> {
-  const side = { style: 'medium', color: { argb } } as const;
+  const side = { style: 'thick', color: { argb } } as const;
   return { top: side, bottom: side, left: side, right: side };
 }
 
@@ -92,15 +93,16 @@ function gardeBorder(argb: string): Partial<ExcelJS.Borders> {
 // Gardes G1/G2 en rouge. Renvoie la cellule parsée pour décider du grisé (week-end / congé).
 function setDayCell(cell: ExcelJS.Cell, weekday: number, raw: string | undefined): PlanningCell {
   const c = planningCell(weekday, raw);
+  const mainText = postLabel(c.main);
   const mainFont: Partial<ExcelJS.Font> = { bold: !!c.main, size: 11 };
   if (isGarde(c.main)) mainFont.color = { argb: RED };
   if (!c.morning && !c.afternoon) {
-    cell.value = c.main; // simple : juste le poste de la journée
+    cell.value = mainText; // simple : juste le poste de la journée
     if (c.main) cell.font = mainFont;
   } else {
     const runs: ExcelJS.RichText[] = [];
     if (c.morning) runs.push({ text: c.morning + '\n', font: ANNOT_FONT });
-    runs.push({ text: c.main || ' ', font: mainFont });
+    runs.push({ text: mainText || ' ', font: mainFont });
     if (c.afternoon) runs.push({ text: '\n' + c.afternoon, font: c.afternoonKind === 'garde' ? GARDE_ANNOT_FONT : ANNOT_FONT });
     cell.value = { richText: runs };
   }
@@ -145,7 +147,7 @@ export async function toXlsx(planning: PlanningRow, doctors: string[], year: num
   const counterTitle = sheet.addRow(['Compteur des postes']);
   counterTitle.getCell(1).font = { bold: true };
   for (const post of POST_ROWS) {
-    const row = sheet.addRow([post, ...planning.days.map((d) => pc.counts[d.day][post] ?? 0)]);
+    const row = sheet.addRow([postLabel(post), ...planning.days.map((d) => pc.counts[d.day][post] ?? 0)]);
     row.getCell(1).font = { bold: true };
     planning.days.forEach((d, i) => {
       const bad = pc.flagged[d.day].has(post) || ((post === 'CS1' || post === 'CS2') && pc.flagged[d.day].has('CS'));

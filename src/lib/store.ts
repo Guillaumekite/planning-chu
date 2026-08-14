@@ -73,15 +73,24 @@ export function saveAvailability(year: number, month: number, avail: MonthAvaila
 
 /**
  * Bordure de la case pour les postes combinés « jour + garde du soir »
- * (ex : 'ACU+G2', 'U+G1') : contour 2px à la couleur de la garde
+ * (ex : 'ACU+G2', 'U+G1') : contour 4px à la couleur de la garde
  * — rouge pour G1, orange pour G2 (mêmes couleurs que les gardes seules).
  * Les autres cases gardent la bordure grise fine par défaut.
  */
 export function gardeBorderStyle(post: string | undefined): string {
   const evening = post?.split('+')[1];
-  if (evening === 'G1') return 'border-2 border-red-600';
-  if (evening === 'G2') return 'border-2 border-orange-500';
+  if (evening === 'G1') return 'border-4 border-red-600';
+  if (evening === 'G2') return 'border-4 border-orange-500';
   return 'border border-gray-100';
+}
+
+/**
+ * Libellé affiché pour un poste. La donnée interne (algo, compteurs, équité)
+ * reste inchangée : c'est purement de la présentation.
+ * 'MS' est montré 'MM-MS' à l'utilisateur.
+ */
+export function postLabel(post: string | undefined): string {
+  return post === 'MS' ? 'MM-MS' : (post ?? '');
 }
 
 /** Tailwind classes for each post acronym, for the planning grid. */
