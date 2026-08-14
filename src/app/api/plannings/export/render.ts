@@ -84,7 +84,7 @@ const GARDE_ANNOT_FONT = { size: 8, bold: true, color: { argb: RED } } as const;
 const G1_BORDER = 'FFCC0000'; // rouge
 const G2_BORDER = 'FFF97316'; // orange
 function gardeBorder(argb: string): Partial<ExcelJS.Borders> {
-  const side = { style: 'medium', color: { argb } } as const;
+  const side = { style: 'thick', color: { argb } } as const;
   return { top: side, bottom: side, left: side, right: side };
 }
 

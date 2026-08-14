@@ -79,8 +79,8 @@ export function saveAvailability(year: number, month: number, avail: MonthAvaila
  */
 export function gardeBorderStyle(post: string | undefined): string {
   const evening = post?.split('+')[1];
-  if (evening === 'G1') return 'border-2 border-red-600';
-  if (evening === 'G2') return 'border-2 border-orange-500';
+  if (evening === 'G1') return 'border-4 border-red-600';
+  if (evening === 'G2') return 'border-4 border-orange-500';
   return 'border border-gray-100';
 }
 
