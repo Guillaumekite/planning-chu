@@ -1,4 +1,4 @@
-import { WEEKDAYS_FR, postStyle } from '@/lib/store';
+import { WEEKDAYS_FR, postStyle, gardeBorderStyle } from '@/lib/store';
 import { planningCell } from '@/lib/planning-cell';
 
 export type GridDay = { day: number; weekday: number; isWeekend: boolean; isHoliday: boolean };
@@ -32,7 +32,7 @@ export default function PlanningGrid({
                 const raw = grid[doc]?.[d.day];
                 const { morning, main, afternoon } = planningCell(d.weekday, raw);
                 return (
-                  <td key={d.day} className={`h-12 border border-gray-100 px-0.5 align-middle ${postStyle(raw)}`}>
+                  <td key={d.day} className={`h-12 ${gardeBorderStyle(raw)} px-0.5 align-middle ${postStyle(raw)}`}>
                     <div className="text-[8px] leading-none text-gray-600/70">{morning || ' '}</div>
                     <div className="text-[11px] font-medium leading-tight">{main}</div>
                     <div className="text-[8px] leading-none text-gray-600/70">{afternoon || ' '}</div>

@@ -79,6 +79,15 @@ export function toCsv(planning: PlanningRow, doctors: string[]): string {
 const ANNOT_FONT = { size: 8, italic: true, color: { argb: 'FF7A7A7A' } } as const;       // réunions (matin/aprem)
 const GARDE_ANNOT_FONT = { size: 8, bold: true, color: { argb: RED } } as const;           // garde du soir (ex : G2 18h)
 
+// Contour de la case combinée « jour + garde du soir » : rouge pour G1, orange pour G2
+// (mêmes couleurs que la grille à l'écran) → on repère d'un coup d'œil les jours avec garde.
+const G1_BORDER = 'FFCC0000'; // rouge
+const G2_BORDER = 'FFF97316'; // orange
+function gardeBorder(argb: string): Partial<ExcelJS.Borders> {
+  const side = { style: 'medium', color: { argb } } as const;
+  return { top: side, bottom: side, left: side, right: side };
+}
+
 // Render a doctor-day cell like the on-screen grid: matin (petit, gris) / POSTE (gras) / soir (petit).
 // Gardes G1/G2 en rouge. Renvoie la cellule parsée pour décider du grisé (week-end / congé).
 function setDayCell(cell: ExcelJS.Cell, weekday: number, raw: string | undefined): PlanningCell {
@@ -96,6 +105,9 @@ function setDayCell(cell: ExcelJS.Cell, weekday: number, raw: string | undefined
     cell.value = { richText: runs };
   }
   cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
+  const evening = raw?.split('+')[1]; // 'ACU+G2' → 'G2'
+  if (evening === 'G1') cell.border = gardeBorder(G1_BORDER);
+  else if (evening === 'G2') cell.border = gardeBorder(G2_BORDER);
   return c;
 }
 
