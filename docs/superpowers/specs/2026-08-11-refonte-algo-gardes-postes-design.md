@@ -197,3 +197,33 @@ de repos du solveur tolèrent exactement les jours G+ FORCÉS qu'elles contienne
 - **Anti-répétition des postes de base en filtre + réparation par échange** : quand le pool
   résiduel du jour n'offrait aucune alternative, le répétiteur échange son poste avec un
   autre porteur de poste générique (BM/Ped/S/HC) du jour qui ne répéterait pas.
+
+---
+
+## Addendum 3 (2026-08-14) — équité renforcée, espacement, P par jour, remplacements
+
+### E. Taxe hauts compteurs
+Chaque garde au-delà de la moyenne d'équipe arrondie (⌈gardes du mois / effectif⌉) est
+pénalisée (MILP + polissage) : quand une garde doit changer de main, elle vient du médecin
+le plus chargé (le 6-gardes), plus du milieu (le 4-gardes). La proportionnalité à la
+présence reste maîtresse en dessous de ce plafond.
+
+### F. Plafond souple « 1 garde par semaine »
+La 2e garde d'une même semaine lun→dim est pénalisée (sauf paires de G+ posés) : corrige
+les « semaines à 2 gardes / semaines à 0 » et resserre l'espacement vers l'hebdomadaire.
+
+### G. Week-ends espacés
+2 gardes de week-end dans le mois : jamais le même week-end (pénalité forte), et préférence
+souple pour des week-ends NON consécutifs (au moins un week-end complet d'écart) — MILP
+(paires de week-ends adjacents) + polissage.
+
+### H. Poste P programmé par jour (remplace l'extra ≥ 12)
+P le mardi si ≥ 13 travaillants ; le jeudi et le vendredi si ≥ 11 ; jamais lundi ni
+mercredi. Réservé aux profils « P ». Compatible avec une garde du soir : le porteur devient
+P+G1 / P+G2 (contour garde), et un remplaçant de journée est nommé dans le cœur.
+
+### I. Remplacements de journée unifiés (BM-BS / MM-MS)
+Quand le G1 est absent du service en journée (U+G1, P+G1) → BM-BS (bloc 7h30-18h).
+Quand le G2 du soir est indisponible en journée (U+G2, acu de garde, P+G2) → MM-MS.
+Le moteur n'émet plus les libellés MM / MS (l'affichage des anciens plannings publiés
+les montre toujours en MM-MS).

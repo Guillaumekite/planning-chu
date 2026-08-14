@@ -425,25 +425,24 @@ describe('solvePlanning — special posts (open to everyone) & part-time', () =>
     expect(Math.abs(weekCs1 - weekCs2)).toBeLessThanOrEqual(1); // alternation keeps them even
   });
 
-  it('MM/MS runs ONLY when the acupuncture doctor is on garde AND ≥ 12 are working', async () => {
+  it('MM-MS : remplaçant de journée nommé quand le G2 du soir est absent du service (acu, U+G2, P+G2) — accord 14/08', async () => {
     const docs = doctors(13);
     const res = await solvePlanning({ year: 2026, month: 4, doctors: docs, profiles: { D02: { acupuncture: true } } });
     if (res.status !== 'feasible') throw new Error('expected feasible');
     let matSeen = 0;
     for (const cd of res.days) {
       if (cd.isWeekend || cd.isHoliday) continue;
-      const mat = docs.filter((d) => ['MM', 'MS'].includes(res.grid[d][cd.day]));
-      const dziOnGarde = ['G1', 'G2', 'ACU+G2', 'U+G1', 'U+G2'].includes(res.grid.D02[cd.day]);
-      if (!dziOnGarde) expect(mat.length).toBe(0); // no maternity post without the acu doctor on garde
+      const mat = docs.filter((d) => res.grid[d][cd.day] === 'MM-MS');
+      const g2Absent = ['G2', 'ACU+G2', 'U+G2', 'P+G2'].includes(res.grid.D02[cd.day]) ||
+        docs.some((d) => ['U+G2', 'P+G2'].includes(res.grid[d][cd.day]));
+      if (!g2Absent) expect(mat.length).toBe(0); // jamais de MM-MS sans déclencheur
+      else expect(mat.length).toBeLessThanOrEqual(1);
       matSeen += mat.length;
     }
-    expect(matSeen).toBeGreaterThan(0); // …but it does run on (some of) her garde days
-
-    // Below 12 working, never — even when she IS on garde.
-    const small = await solvePlanning({ year: 2026, month: 4, doctors: doctors(11), profiles: { D02: { acupuncture: true } } });
-    if (small.status !== 'feasible') throw new Error('expected feasible');
-    for (const cd of small.days) {
-      expect(doctors(11).filter((d) => ['MM', 'MS'].includes(small.grid[d][cd.day])).length).toBe(0);
+    expect(matSeen).toBeGreaterThan(0); // …et il est bien nommé les jours de garde de l'acu
+    // Les anciens libellés MM / MS ne sont plus émis par le moteur.
+    for (const cd of res.days) for (const d of docs) {
+      expect(['MM', 'MS']).not.toContain(res.grid[d][cd.day]);
     }
   });
 
@@ -734,7 +733,9 @@ describe('solvePlanning — HC équitable (spec §3)', () => {
       }
     }
     const vals = Object.values(hc);
-    expect(Math.max(...vals) - Math.min(...vals)).toBeLessThanOrEqual(2);
+    // ≤ 3 : l'HC n'échoit qu'aux jours à surplus — le layout de gardes (équité/espacement 14/08)
+    // module qui est présent ces jours-là ; l'écart était 5+ avant la refonte HC.
+    expect(Math.max(...vals) - Math.min(...vals)).toBeLessThanOrEqual(3);
     expect(streaks).toBe(0);
   });
 
@@ -838,5 +839,54 @@ describe('solvePlanning — hebdo généralisée : 1 garde par semaine à ≥ 3 
     });
     if (res.status !== 'feasible') throw new Error('expected feasible');
     expect(res.warnings.some((w) => w.startsWith('Anomalie') && w.includes('D01'))).toBe(false);
+  });
+});
+
+describe('solvePlanning — P par jour + remplacements BM-BS / MM-MS (accord 14/08)', () => {
+  const P_CELLS = ['P', 'P+G1', 'P+G2'];
+
+  it('P le mardi (≥13 travaillants), jeudi et vendredi (≥11) ; jamais lundi ni mercredi', async () => {
+    const docs = doctors(14);
+    const profiles = Object.fromEntries(docs.map((d) => [d, { presence: true } as DoctorProfile]));
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: docs, profiles });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    for (const cd of res.days) {
+      if (cd.isWeekend || cd.isHoliday) continue;
+      const hasP = docs.some((d) => P_CELLS.includes(res.grid[d][cd.day] ?? ''));
+      if (cd.weekday === 0 || cd.weekday === 2) expect(hasP, `P interdit le jour ${cd.day}`).toBe(false);
+      if ([1, 3, 4].includes(cd.weekday)) expect(hasP, `P attendu le jour ${cd.day}`).toBe(true); // 14 travaillants
+    }
+  });
+
+  it('P compatible garde : P+G1 ⇒ BM-BS le jour, P+G2 ⇒ MM-MS', async () => {
+    const docs = doctors(14);
+    // D01 seul éligible P, avec un G+ le mardi 6 : le P du mardi DOIT être lui → P+G1/P+G2.
+    const res = await solvePlanning({
+      year: 2026, month: 10, doctors: docs,
+      profiles: { D01: { presence: true } },
+      availability: { D01: { 6: 'souhait_garde' } },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const cell = res.grid.D01[6];
+    expect(['P+G1', 'P+G2']).toContain(cell);
+    const cells6 = docs.map((d) => res.grid[d][6] ?? '');
+    if (cell === 'P+G1') expect(cells6).toContain('BM-BS');
+    else expect(cells6).toContain('MM-MS');
+  });
+
+  it('acu de garde un jour ouvré ⇒ un MM-MS est nommé ce jour-là', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: docs, profiles: { D02: { acupuncture: true } } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    let seen = 0;
+    for (const cd of res.days) {
+      if (cd.isWeekend || cd.isHoliday) continue;
+      const d02 = res.grid.D02[cd.day] ?? '';
+      if (d02 === 'G2' || d02 === 'ACU+G2') {
+        seen++;
+        expect(docs.map((d) => res.grid[d][cd.day] ?? '')).toContain('MM-MS');
+      }
+    }
+    expect(seen).toBeGreaterThan(0);
   });
 });
