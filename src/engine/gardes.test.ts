@@ -445,3 +445,60 @@ describe('solveGardes — G+ rapprochés : Garde–RS–Garde accepté pour les 
     }
   });
 });
+
+describe('solveGardes — taxe hauts compteurs, ≤ 1 garde/semaine, week-ends espacés (accord 14/08)', () => {
+  it('mois à congés massifs : les pleinement présents ne dépassent pas moyenne+1 sans G+', async () => {
+    // 17 médecins, 5 très absents → l'ancien comportement donnait 6 gardes aux pleins présents.
+    const gardeBlocked: Record<string, number[]> = {};
+    for (const d of ['D13', 'D14', 'D15', 'D16', 'D17']) {
+      gardeBlocked[d] = Array.from({ length: 30 }, (_, i) => i + 1).filter((x) => x > 8);
+    }
+    const res = await solveGardes({ year: 2026, month: 9, doctors: doctors(17), gardeBlocked });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const meanCeil = Math.ceil(60 / 17); // 4
+    for (const [doc, c] of Object.entries(res.equity.count)) {
+      expect(c, `${doc} a ${c} gardes`).toBeLessThanOrEqual(meanCeil + 1);
+    }
+  });
+
+  it('au plus 1 garde par semaine (lun→dim) par médecin — hors paires G+', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(14) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    let doubles = 0;
+    const byDocWeek = new Map<string, number>();
+    for (const a of res.assignments) {
+      const wd = new Date(Date.UTC(2026, 9, a.day)).getUTCDay(); // 0=dim..6=sam
+      const weekId = a.day - ((wd + 6) % 7); // lundi de la semaine
+      const key = `${a.doctorId}|${weekId}`;
+      const n = (byDocWeek.get(key) ?? 0) + 1;
+      byDocWeek.set(key, n);
+      if (n === 2) doubles++;
+    }
+    expect(doubles).toBeLessThanOrEqual(2); // tolérance : cas contraints résiduels
+  });
+
+  it('2 gardes de week-end dans le mois : jamais le même week-end, rarement deux consécutifs', async () => {
+    const res = await solveGardes({ year: 2026, month: 10, doctors: doctors(14) });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    let adjacent = 0;
+    const weBlocks = new Map<string, number[]>();
+    for (const a of res.assignments) {
+      const wd = new Date(Date.UTC(2026, 9, a.day)).getUTCDay();
+      if (![5, 6, 0].includes(wd)) continue;
+      const weekId = a.day - ((wd + 6) % 7);
+      (weBlocks.get(a.doctorId) ?? weBlocks.set(a.doctorId, []).get(a.doctorId)!).push(weekId);
+    }
+    for (const blocks of weBlocks.values()) {
+      if (blocks.length !== 2) continue;
+      const gap = Math.abs(blocks[0] - blocks[1]);
+      expect(gap).toBeGreaterThan(0); // jamais 2 gardes le même week-end
+      if (gap === 7) adjacent++;
+    }
+    // Préférence souple (« si possible ») : avant la règle on observait 10 paires de week-ends
+    // consécutifs ; le solveur en laisse quelques-unes quand les autres équités priment.
+    expect(adjacent).toBeLessThanOrEqual(4);
+  });
+});

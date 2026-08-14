@@ -629,6 +629,68 @@ async function solveFeasibility(
       }
     }
   }
+  // Taxe hauts compteurs (accord 14/08) : chaque garde AU-DELÀ de la moyenne d'équipe arrondie
+  // coûte cher — quand une garde doit changer de main, elle vient du sommet (le médecin à 6)
+  // et plus du milieu (celui à 4). La proportionnalité à la présence reste maîtresse en dessous.
+  const meanCeil = Math.ceil((2 * days.length) / doctors.length);
+  for (const doc of doctors) {
+    if (!docVars[doc].length) continue;
+    subjectTo.push({
+      name: `over_${doc}`,
+      vars: [...docVars[doc], { name: `overv_${doc}`, coef: -1 }],
+      bnds: { type: glpk.GLP_UP, lb: 0, ub: meanCeil },
+    });
+    objVars.push({ name: `overv_${doc}`, coef: 6 });
+  }
+  // Plafond souple « 1 garde par semaine » (accord 14/08) : la 2e garde d'une même semaine
+  // lun→dim est pénalisée (répartit ~1/semaine, corrige « semaine à 2 / semaine à 0 »).
+  // Une paire de G+ posés dans la même semaine rend la pénalité constante — sans effet de choix.
+  // Et par week-end (ven/sam/dim d'une même semaine) : 2 gardes le même week-end fortement
+  // pénalisées (l'écart d'un week-end complet est géré en préférence par le polissage).
+  const weekSegs = new Map<number, CalendarDay[]>();
+  for (const cd of days) {
+    const wid = cd.day - cd.weekday;
+    if (!weekSegs.has(wid)) weekSegs.set(wid, []);
+    weekSegs.get(wid)!.push(cd);
+  }
+  for (const doc of doctors) {
+    for (const [wid, seg] of [...weekSegs.entries()].sort((a, b) => a[0] - b[0])) {
+      const vars = seg.filter((cd) => allowed(cd.day, doc)).map((cd) => ({ name: gv(cd.day, doc), coef: 1 }));
+      if (vars.length >= 2) {
+        subjectTo.push({
+          name: `wcap_${wid}_${doc}`,
+          vars: [...vars, { name: `wover_${wid}_${doc}`, coef: -1 }],
+          bnds: { type: glpk.GLP_UP, lb: 0, ub: 1 },
+        });
+        objVars.push({ name: `wover_${wid}_${doc}`, coef: 4 });
+      }
+      const weVars = seg.filter((cd) => isGardeWeekend(cd) && allowed(cd.day, doc)).map((cd) => ({ name: gv(cd.day, doc), coef: 1 }));
+      if (weVars.length >= 2) {
+        subjectTo.push({
+          name: `webk_${wid}_${doc}`,
+          vars: [...weVars, { name: `webkov_${wid}_${doc}`, coef: -1 }],
+          bnds: { type: glpk.GLP_UP, lb: 0, ub: 1 },
+        });
+        objVars.push({ name: `webkov_${wid}_${doc}`, coef: 5 });
+      }
+    }
+    // « Une semaine d'écart » entre 2 gardes de week-end (accord 14/08) : sur toute paire de
+    // week-ends CONSÉCUTIFS, au plus 1 garde de WE — souple, pour que les 2 WE du mois soient
+    // séparés d'un week-end complet quand c'est possible.
+    const widsSorted = [...weekSegs.keys()].sort((a, b) => a - b);
+    for (let i = 0; i + 1 < widsSorted.length; i++) {
+      const pairVars = [...weekSegs.get(widsSorted[i])!, ...weekSegs.get(widsSorted[i + 1])!]
+        .filter((cd) => isGardeWeekend(cd) && allowed(cd.day, doc))
+        .map((cd) => ({ name: gv(cd.day, doc), coef: 1 }));
+      if (pairVars.length < 2) continue;
+      subjectTo.push({
+        name: `wesp_${widsSorted[i]}_${doc}`,
+        vars: [...pairVars, { name: `wespov_${widsSorted[i]}_${doc}`, coef: -1 }],
+        bnds: { type: glpk.GLP_UP, lb: 0, ub: 1 },
+      });
+      objVars.push({ name: `wespov_${widsSorted[i]}_${doc}`, coef: 4 });
+    }
+  }
   // Minimum 2 gardes pour les présents ≥ 8 jours (minTwo) : contrainte souple fortement
   // pénalisée — Σ gardes + slack ≥ 2. Les G+ forcés restent intouchables ; l'allègement des
   // plus chargés passe par les gardes libres uniquement.
@@ -814,11 +876,47 @@ function polishEquity(
     wWeekOf[doc] = W_WEEK * (1 + 1 / Math.max(1, n));
   }
 
-  // Coût hebdomadaire PONDÉRÉ : semaines attendues du médecin restées sans garde.
+  // Structure hebdomadaire (accord 14/08) : segments lun→dim du mois, pour le plafond souple
+  // « 1 garde/semaine » et l'espacement des week-ends.
+  const weekSegs: number[][] = (() => {
+    const m = new Map<number, number[]>();
+    for (const cd of days) {
+      const wid = cd.day - cd.weekday;
+      if (!m.has(wid)) m.set(wid, []);
+      m.get(wid)!.push(cd.day);
+    }
+    return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+  })();
+  const W_WEEK2 = 4; // 2e garde d'une même semaine
+  const W_WEBLOCK = 5; // 2 gardes le même week-end (ven/sam/dim)
+  const W_WESPACE = 8; // 2 gardes de WE sur des week-ends consécutifs (préférence souple)
+  // Taxe hauts compteurs (accord 14/08) — miroir du MILP : au-delà de la moyenne d'équipe
+  // arrondie, chaque garde supplémentaire coûte — les décharges viennent du sommet.
+  const meanCeil = Math.ceil((2 * days.length) / doctors.length);
+  const overCost = (c: number) => 6 * Math.max(0, c - meanCeil);
+
+  // Coût hebdomadaire PONDÉRÉ : semaines attendues sans garde + doublons de semaine +
+  // week-ends non espacés. Recalculé sur l'ensemble du set (utilisé par moves ET swaps).
   const weekCost = (doc: DoctorId, set: Set<number>): number => {
-    let missed = 0;
-    for (const week of weeklyExpected[doc] ?? []) if (!week.some((d) => set.has(d))) missed++;
-    return missed * wWeekOf[doc];
+    let cost = 0;
+    for (const week of weeklyExpected[doc] ?? []) if (!week.some((d) => set.has(d))) cost += wWeekOf[doc];
+    for (const seg of weekSegs) {
+      let n = 0;
+      for (const d of seg) if (set.has(d)) n++;
+      if (n >= 2) cost += W_WEEK2 * (n - 1);
+    }
+    // Week-ends : blocs (lundi de la semaine) des gardes ven/sam/dim.
+    const blocks: number[] = [];
+    for (const d of set) {
+      const cd = dayByNum.get(d)!;
+      if (isGardeWeekend(cd)) blocks.push(d - cd.weekday);
+    }
+    if (blocks.length === 2) {
+      const gap = Math.abs(blocks[0] - blocks[1]);
+      if (gap === 0) cost += W_WEBLOCK;
+      else if (gap === 7) cost += W_WESPACE;
+    }
+    return cost;
   };
 
   // Pairings with forceG2 doctors: every day shared with one forces the partner into G1, so
@@ -899,6 +997,7 @@ function polishEquity(
           // Fairness deltas vs each doctor's FTE-proportional target (count always; heavy/weekend on those days).
           let delta =
             W_COUNT * (sq(monthCount[a] - 1 - tgtCount[a]) + sq(monthCount[b] + 1 - tgtCount[b]) - sq(monthCount[a] - tgtCount[a]) - sq(monthCount[b] - tgtCount[b]));
+          delta += overCost(monthCount[a] - 1) + overCost(monthCount[b] + 1) - overCost(monthCount[a]) - overCost(monthCount[b]);
           if (heavy) {
             delta += W_HEAVY * (sq(cumHeavy[a] - 1 - tgtHeavy[a]) + sq(cumHeavy[b] + 1 - tgtHeavy[b]) - sq(cumHeavy[a] - tgtHeavy[a]) - sq(cumHeavy[b] - tgtHeavy[b]));
           }
