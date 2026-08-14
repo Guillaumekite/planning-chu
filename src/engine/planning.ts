@@ -439,12 +439,15 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   // only, the day's G1 already covers the bloc, no replacement). Otherwise a plain 'U'.
   // (Placed BEFORE ACU and récup: the working count that gates those must know who is at the fac.)
   const bmbsDays = new Set<number>();
+  // Jours où un universitaire déclaré est U+G2 : sa garde du soir tient, mais un remplaçant
+  // de journée MM-MS doit être nommé (accord du 14/08 — symétrique du BM-BS pour U+G1).
+  const uG2Days = new Set<number>();
   for (const doc of doctors) {
     if (univDays[doc].size === 0) continue;
     for (const day of univDays[doc]) {
       const cell = grid[doc][day];
       if (cell === 'G1') { grid[doc][day] = 'U+G1'; bmbsDays.add(day); }
-      else if (cell === 'G2') { grid[doc][day] = 'U+G2'; }
+      else if (cell === 'G2') { grid[doc][day] = 'U+G2'; uG2Days.add(day); }
       else if (basePresent(doc, day) && !cell) grid[doc][day] = 'U';
     }
   }
@@ -635,16 +638,53 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     // constraint), then CS picked from a still-wide pool (so its equity/cap logic has real
     // choice — filling CS last used to leave it the 2 leftover doctors, with zero freedom),
     // then the fully-generic blocs (BM / Ped) last.
+    const g = gardeByDay[cd.day] ?? {};
+    const acuOnGarde = [g.G1, g.G2].some((d) => d && acuDocs.has(d));
+
+    // --- Poste P (accord du 14/08) : programmé PAR JOUR — mardi si ≥ 13 travaillants, jeudi
+    // et vendredi si ≥ 11, jamais lundi ni mercredi. Réservé aux profils « P ». Compatible
+    // avec une garde du soir : le porteur devient P+G1/P+G2 et un remplaçant de journée est
+    // nommé dans le cœur (BM-BS pour couvrir le bloc du G1, MM-MS pour le G2).
+    const pDay =
+      (cd.weekday === 1 && working >= 13) ||
+      ((cd.weekday === 3 || cd.weekday === 4) && working >= 11);
+    let pOnG1 = false;
+    let pOnG2 = false;
+    if (pDay) {
+      const poolCands = pool.filter((d) => presenceDocs.has(d));
+      const gardeCands = [g.G1, g.G2].filter(
+        (d): d is DoctorId => !!d && presenceDocs.has(d) && (grid[d][cd.day] === 'G1' || grid[d][cd.day] === 'G2'),
+      );
+      const pick = [...poolCands, ...gardeCands].sort((a, b) => {
+        const ca = postCount[a]['P'] ?? 0, cb = postCount[b]['P'] ?? 0;
+        if (ca !== cb) return ca - cb;
+        if (totalPosts[a] !== totalPosts[b]) return totalPosts[a] - totalPosts[b];
+        return rot(a) - rot(b);
+      })[0];
+      if (pick !== undefined) {
+        if (poolCands.includes(pick)) {
+          assign(pick, 'P');
+        } else {
+          const role = grid[pick][cd.day]; // 'G1' | 'G2'
+          grid[pick][cd.day] = role === 'G1' ? 'P+G1' : 'P+G2';
+          postCount[pick]['P'] = (postCount[pick]['P'] ?? 0) + 1;
+          totalPosts[pick] += 1;
+          if (role === 'G1') pOnG1 = true;
+          else pOnG2 = true;
+        }
+      }
+    }
+
     const coreFirst: string[] = [];
-    if (bmbsDays.has(cd.day)) coreFirst.push('BM-BS'); // bloc 7h30-18h quand un universitaire est U+G1
+    // Remplacements de journée (accord du 14/08) : quand le G1 est absent du service en journée
+    // (U+G1, P+G1) → BM-BS couvre le bloc 7h30-18h ; quand le G2 du soir est indisponible en
+    // journée (U+G2, acu de garde, P+G2) → MM-MS.
+    if (bmbsDays.has(cd.day) || pOnG1) coreFirst.push('BM-BS');
+    if (uG2Days.has(cd.day) || acuOnGarde || pOnG2) coreFirst.push('MM-MS');
     coreFirst.push('S');
     // Ped IS one of the day's blocs on Mon/Wed/Thu/Fri: it replaces the 2nd BM (exactly one Ped
     // those days, none on Tuesday). The ≥10 extra below still adds a plain BM.
     const coreRest: string[] = ['BM', PED_DAYS.has(cd.weekday) ? 'Ped' : 'BM'];
-
-    // Maternité trigger (utilisé par le plan HC ci-dessous ET l'extra MM/MS plus bas).
-    const g = gardeByDay[cd.day] ?? {};
-    const acuOnGarde = [g.G1, g.G2].some((d) => d && acuDocs.has(d));
 
     // --- Spec §3 : on choisit d'abord QUI part en HC, ensuite on distribue les postes ---
     // (l'ancien « HC = le reste » concentrait les HC sur les mêmes personnes plusieurs jours
@@ -663,16 +703,12 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       let n = 0;
       if (b > 0 && working >= 10) { n++; b--; } // 3e BM
       if (b > 0 && working >= 11 && cdSorted.length) { n++; b--; } // CD
-      if (b > 0 && working >= 12 && pool.some((d) => presenceDocs.has(d))) { n++; b--; } // P
-      if (b > 0 && working >= 12 && acuOnGarde) { n++; b--; } // MM/MS
       return n;
     })();
     let hcToday = Math.max(0, pool.length - (coreFirst.length + coreRest.length + csSlots + extrasPlanned));
     if (hcToday > 0) {
-      const pCand = pool.filter((d) => presenceDocs.has(d));
       const protectedDocs = new Set<DoctorId>();
       if (working >= 11 && cdSorted.length) protectedDocs.add(cdSorted[0]); // le CD du jour
-      if (working >= 12 && pCand.length === 1) protectedDocs.add(pCand[0]); // seul P possible
       const hcSort = (arr: DoctorId[]) => [...arr].sort((a, b) => {
         const ra = hcCnt[a] / Math.max(presWeekdays[a], 1);
         const rb = hcCnt[b] / Math.max(presWeekdays[b], 1);
@@ -733,20 +769,10 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
         budget -= 1;
       }
     }
-    if (budget > 0 && working >= 12) {
-      // P (présence) — only doctors with the P checkbox.
-      const doc = leastFor('P', pool.filter((d) => presenceDocs.has(d)));
-      if (doc) { assign(doc, 'P'); budget -= 1; }
-    }
-    // Maternité : UNIQUEMENT quand le médecin acupuncture (Dzierzek) est de garde ce jour ET
-    // ≥ 12 travaillants. 'MS' (couverture jusqu'à 18h) si sa garde suit un ACU en journée, sinon 'MM'.
-    if (budget > 0 && acuOnGarde && working >= 12) {
-      const post = acuG2Days.has(cd.day) ? 'MS' : 'MM';
-      const doc = leastFor(post);
-      if (doc) { assign(doc, post); budget -= 1; }
-    }
+    // (P et MM-MS ne sont plus des extras : le P est programmé par jour plus haut, et les
+    // remplacements BM-BS / MM-MS font partie du cœur — accord du 14/08.)
 
-    // Core wave 1 — [BM-BS], S. "Pas de S": the S post never goes to a flagged doctor; if nobody
+    // Core wave 1 — [BM-BS], [MM-MS], S. "Pas de S": the S post never goes to a flagged doctor; if nobody
     // else remains, S stays uncovered with a warning (flagged doctors fall through to other posts).
     for (const post of coreFirst) {
       if (pool.length === 0) break;
