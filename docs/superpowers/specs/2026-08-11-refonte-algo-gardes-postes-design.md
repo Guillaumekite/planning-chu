@@ -167,3 +167,33 @@ la conversion HC→U comble le déficit restant pendant la Pass 3 ; l'avertissem
 Tests : cibles minTwo (2 gardes atteintes / impossible ⇒ 1 + warning), intégration G−,
 scénario de complétion bloquée (garde-fou ≥ 9) comblé par conversion, invariant « un
 universitaire sous son objectif ne reçoit jamais de HC ».
+
+---
+
+## Addendum 2 (2026-08-13) — hebdo généralisée et G+ rapprochés
+
+### C. « Une garde par semaine » généralisée : ≥ 3 jours gardables
+L'attente hebdomadaire ne se limite plus aux semaines complètes travaillées : toute semaine
+lun→dim où le médecin a **au moins 3 jours gardables** (jours du mois uniquement — les
+semaines de bord comptent avec leurs seuls jours dans le mois ; gardable = ni congé, ni off
+TP, ni G−, ni blocage) attend 1 garde. Temps partiels exemptés (équité pro-rata).
+La pénalité de semaine manquée est **dégressive avec le nombre de semaines éligibles** du
+médecin : sacrifier l'unique semaine d'un médecin peu présent coûte bien plus cher que faire
+tourner le « saut » chez les temps pleins (14 gardes/semaine seulement). Anomalie nominative
+au bandeau pour toute semaine éligible restée sans garde.
+
+### D. G+ à 1 jour d'intervalle (Garde–RS–Garde)
+Deux G+ posés par le même médecin sont acceptés dès qu'un seul jour les sépare
+(Garde–RS–Garde). Strictement réservé aux G+ : l'algorithme garde ses 2 jours minimum
+d'intervalle partout ailleurs, y compris entre une garde qu'il place et un G+. Un G+
+adjacent à un autre reste refusé (le RS est incompressible). Implémentation : les fenêtres
+de repos du solveur tolèrent exactement les jours G+ FORCÉS qu'elles contiennent.
+
+### Correctifs de moteur découverts en route
+- **Espacement retiré des déplacements simples** du polissage (réservé aux échanges,
+  neutres en nombre) : comparer le coût d'espacement entre des nombres de gardes différents
+  était biaisé — « 0 garde » a un espacement parfait, le polissage vidait les médecins peu
+  disponibles de leur unique garde.
+- **Anti-répétition des postes de base en filtre + réparation par échange** : quand le pool
+  résiduel du jour n'offrait aucune alternative, le répétiteur échange son poste avec un
+  autre porteur de poste générique (BM/Ped/S/HC) du jour qui ne répéterait pas.

@@ -410,3 +410,38 @@ describe('solveGardes — minimum 2 gardes pour les présents ≥ 8 jours (minTw
     expect(res.warnings.some((w) => w.includes('D01') && w.includes('garde'))).toBe(true);
   });
 });
+
+describe('solveGardes — G+ rapprochés : Garde–RS–Garde accepté pour les G+ posés (accord 13/08)', () => {
+  it('deux G+ à 1 jour d\'intervalle (10 et 12) sont tous deux honorés', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [10, 12] } });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(res.assignments.some((a) => a.day === 10 && a.doctorId === 'D05')).toBe(true);
+    expect(res.assignments.some((a) => a.day === 12 && a.doctorId === 'D05')).toBe(true);
+    expect(res.warnings.some((w) => w.includes('D05') && w.includes('repos'))).toBe(false);
+  });
+
+  it('deux G+ adjacents (10 et 11) : le second reste refusé (le RS du 11 est incompressible)', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [10, 11] } });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(res.assignments.some((a) => a.day === 11 && a.doctorId === 'D05')).toBe(false);
+    expect(res.warnings.some((w) => w.includes('repos'))).toBe(true);
+  });
+
+  it('l\'algorithme, lui, ne place jamais 2 gardes à moins de 2 jours d\'écart sans G+', async () => {
+    const res = await solveGardes({ year: 2026, month: 4, doctors: doctors(12), wishes: { D05: [10, 12] } });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const byDoc: Record<string, number[]> = {};
+    for (const a of res.assignments) (byDoc[a.doctorId] ??= []).push(a.day);
+    for (const [doc, ds] of Object.entries(byDoc)) {
+      const sorted = [...ds].sort((x, y) => x - y);
+      for (let i = 1; i < sorted.length; i++) {
+        const gap = sorted[i] - sorted[i - 1];
+        const isWishPair = doc === 'D05' && sorted[i - 1] === 10 && sorted[i] === 12;
+        expect(gap >= 3 || isWishPair).toBe(true);
+      }
+    }
+  });
+});

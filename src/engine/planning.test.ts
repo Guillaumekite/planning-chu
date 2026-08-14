@@ -809,3 +809,34 @@ describe('solvePlanning — les sièges HC deviennent des jours U pour les unive
     if (cells.includes('HC')) expect(uDays).toBeGreaterThanOrEqual(target);
   });
 });
+
+describe('solvePlanning — hebdo généralisée : 1 garde par semaine à ≥ 3 jours gardables (accord 13/08)', () => {
+  it('présent seulement mar-jeu 6-8 (3 jours gardables) : une garde tombe cette semaine-là', async () => {
+    const conge: Record<number, 'conge'> = {};
+    for (let d = 1; d <= 31; d++) if (![6, 7, 8].includes(d)) conge[d] = 'conge';
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: doctors(14), availability: { D01: conge } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const g = res.days.filter((cd) => ['G1', 'G2'].includes(res.grid.D01[cd.day] ?? '')).map((cd) => cd.day);
+    expect(g.length).toBeGreaterThanOrEqual(1);
+    expect(g.every((d) => [6, 7, 8].includes(d))).toBe(true);
+  });
+
+  it('semaine de bord de mois (jeu 1 → dim 4 oct.) : compte si ≥ 3 jours gardables', async () => {
+    const conge: Record<number, 'conge'> = {};
+    for (let d = 5; d <= 31; d++) conge[d] = 'conge';
+    conge[4] = 'conge'; // gardables restants : 1 (jeu), 2 (ven), 3 (sam) = 3 jours
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: doctors(14), availability: { D01: conge } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const g = res.days.filter((cd) => ['G1', 'G2'].includes(res.grid.D01[cd.day] ?? '')).map((cd) => cd.day);
+    expect(g.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('temps partiel : pas d\'attente hebdo stricte (équité pro-rata), aucune anomalie à son nom', async () => {
+    const res = await solvePlanning({
+      year: 2026, month: 10, doctors: doctors(14),
+      profiles: { D01: { fte: 0.5 } },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.warnings.some((w) => w.startsWith('Anomalie') && w.includes('D01'))).toBe(false);
+  });
+});
