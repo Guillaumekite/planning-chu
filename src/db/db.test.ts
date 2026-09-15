@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import bcrypt from 'bcryptjs';
 import { query, queryOne } from './client';
 import { ensureSchema } from './schema';
 import { setCell } from '@/lib/availability';
+import { setAccount } from '@/lib/doctors';
 
 // Uses the embedded PGlite database (no external Postgres needed).
 describe('database layer (PGlite)', () => {
@@ -77,5 +79,34 @@ describe('database layer (PGlite)', () => {
       [doc!.id],
     );
     expect(av).toEqual({ state: 'souhait_garde', tp_work: false });
+  });
+
+  // Regression: resetting a password after a case-only rename must NOT create a
+  // duplicate account. The account is keyed by doctor_id, not username — otherwise
+  // the INSERT ON CONFLICT (username) inserted a second row and login (which matches
+  // lower(username)) returned the stale row, rejecting the new password.
+  it('reset after a case-only rename keeps one account and the new password works', async () => {
+    await query('DELETE FROM users');
+    await query('DELETE FROM doctors');
+
+    const doc = await queryOne<{ id: number }>(
+      `INSERT INTO doctors (name) VALUES ($1) RETURNING id`,
+      ['Nguyen'],
+    );
+    await setAccount(doc!.id, 'Nguyen', 'oldpass'); // original account
+    await setAccount(doc!.id, 'NGUYEN', 'newpass'); // renamed doctor -> reset
+
+    const count = await queryOne<{ n: number }>(
+      `SELECT count(*)::int AS n FROM users WHERE doctor_id = $1`,
+      [doc!.id],
+    );
+    expect(count?.n).toBe(1);
+
+    // Login exactly as /api/auth/login does it (case-insensitive lookup).
+    const user = await queryOne<{ password_hash: string }>(
+      `SELECT * FROM users WHERE lower(username) = lower($1)`,
+      ['NGUYEN'],
+    );
+    expect(user && bcrypt.compareSync('newpass', user.password_hash)).toBe(true);
   });
 });

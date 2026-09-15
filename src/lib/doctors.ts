@@ -81,10 +81,15 @@ export async function deleteDoctor(id: number): Promise<void> {
 export async function setAccount(doctorId: number, username: string, password: string): Promise<void> {
   await ensureSchema();
   const hash = bcrypt.hashSync(password, 10);
+  // A doctor has exactly ONE login account, keyed by doctor_id (NOT by username).
+  // Keying on username breaks when a doctor is renamed after the account exists: the
+  // reset then inserts a second row instead of updating, and login (case-insensitive)
+  // returns the stale row. Delete any existing rows for this doctor — including any
+  // duplicates left by earlier renames — and recreate a single fresh one.
+  await query(`DELETE FROM users WHERE doctor_id = $1 AND role = 'medecin'`, [doctorId]);
   await query(
     `INSERT INTO users (username, password_hash, role, doctor_id, must_change_password)
-     VALUES ($1, $2, 'medecin', $3, true)
-     ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, doctor_id = EXCLUDED.doctor_id`,
+     VALUES ($1, $2, 'medecin', $3, true)`,
     [username, hash, doctorId],
   );
 }
