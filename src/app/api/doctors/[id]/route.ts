@@ -22,6 +22,7 @@ const PatchBody = z.object({
   douleur_poids: z.number().int().min(0).max(2).optional(),
   force_g2: z.boolean().optional(), // "Jamais G1" (ex. Dzierzek)
   no_s: z.boolean().optional(), // jamais le poste S
+  no_hc: z.boolean().optional(), // jamais le poste HC (hors clinique)
   presence: z.boolean().optional(), // éligible au poste P
   password: z.string().min(1).optional(), // (re)set the doctor's login password
   username: z.string().min(1).optional(),
@@ -34,14 +35,20 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const parsed = PatchBody.safeParse(await req.json().catch(() => null));
   if (!parsed.success || !Number.isInteger(id)) return NextResponse.json({ error: 'Requête invalide' }, { status: 400 });
   const { password, username, generatePassword: gen, ...profile } = parsed.data;
-  await updateDoctor(id, profile);
-  if (gen && username) {
-    const newPassword = generatePassword();
-    await setAccount(id, username, newPassword);
-    return NextResponse.json({ ok: true, password: newPassword });
+  // Always answer JSON, even on failure — the admin UI reads `error` to show an alert
+  // (a bare 500 would be a non-JSON body and the failure would be invisible).
+  try {
+    await updateDoctor(id, profile);
+    if (gen && username) {
+      const newPassword = generatePassword();
+      await setAccount(id, username, newPassword);
+      return NextResponse.json({ ok: true, password: newPassword });
+    }
+    if (password && username) await setAccount(id, username, password);
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message || 'Erreur.' }, { status: 409 });
   }
-  if (password && username) await setAccount(id, username, password);
-  return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {

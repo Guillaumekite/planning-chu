@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { query, queryOne } from './client';
 import { ensureSchema } from './schema';
 import { setCell } from '@/lib/availability';
-import { setAccount } from '@/lib/doctors';
+import { setAccount, deleteDoctor } from '@/lib/doctors';
 
 // Uses the embedded PGlite database (no external Postgres needed).
 describe('database layer (PGlite)', () => {
@@ -108,5 +108,85 @@ describe('database layer (PGlite)', () => {
       ['NGUYEN'],
     );
     expect(user && bcrypt.compareSync('newpass', user.password_hash)).toBe(true);
+  });
+
+  // Regression: deleting a doctor left the users row behind (doctor_id set to NULL by
+  // the FK). Re-creating a doctor with the same name then made "créer le compte" fail
+  // silently: the INSERT hit the unique(username) constraint against the orphaned row.
+  it('supprimer un médecin supprime aussi son compte ; recréer le même nom permet de créer le compte', async () => {
+    await query('DELETE FROM users');
+    await query('DELETE FROM doctors');
+
+    const doc1 = await queryOne<{ id: number }>(
+      `INSERT INTO doctors (name) VALUES ($1) RETURNING id`,
+      ['Martin'],
+    );
+    await setAccount(doc1!.id, 'Martin', 'pass1');
+    await deleteDoctor(doc1!.id);
+
+    const orphans = await queryOne<{ n: number }>(
+      `SELECT count(*)::int AS n FROM users WHERE lower(username) = 'martin'`,
+    );
+    expect(orphans?.n).toBe(0); // no orphaned account left behind
+
+    // Re-create a doctor with the same name and create their account (the admin button).
+    const doc2 = await queryOne<{ id: number }>(
+      `INSERT INTO doctors (name) VALUES ($1) RETURNING id`,
+      ['Martin'],
+    );
+    await setAccount(doc2!.id, 'Martin', 'pass2'); // must not throw on unique(username)
+
+    const user = await queryOne<{ doctor_id: number; password_hash: string }>(
+      `SELECT * FROM users WHERE lower(username) = 'martin'`,
+    );
+    expect(user?.doctor_id).toBe(doc2!.id);
+    expect(user && bcrypt.compareSync('pass2', user.password_hash)).toBe(true);
+  });
+
+  // Even if an orphaned row already exists in a deployed DB (deleted doctor from before
+  // the fix), setAccount must reclaim the username instead of crashing on unique(username).
+  it('setAccount récupère un username orphelin (ligne users sans doctor)', async () => {
+    await query('DELETE FROM users');
+    await query('DELETE FROM doctors');
+
+    // Orphaned account: doctor deleted long ago, FK left doctor_id NULL.
+    await query(
+      `INSERT INTO users (username, password_hash, role, doctor_id) VALUES ('Durand', 'oldhash', 'medecin', NULL)`,
+    );
+
+    const doc = await queryOne<{ id: number }>(
+      `INSERT INTO doctors (name) VALUES ($1) RETURNING id`,
+      ['Durand'],
+    );
+    await setAccount(doc!.id, 'Durand', 'newpass'); // must not throw
+
+    const rows = await query<{ doctor_id: number | null; password_hash: string }>(
+      `SELECT doctor_id, password_hash FROM users WHERE lower(username) = 'durand'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].doctor_id).toBe(doc!.id);
+    expect(bcrypt.compareSync('newpass', rows[0].password_hash)).toBe(true);
+  });
+
+  // doctors.name UNIQUE is case-SENSITIVE, so 'Dupont' and 'DUPONT' can coexist as two
+  // living doctors. Reclaiming the username must NOT silently delete the other doctor's
+  // account — it must fail loudly so the admin sees the conflict.
+  it("setAccount refuse d'écraser le compte d'un autre médecin homonyme (casse différente)", async () => {
+    await query('DELETE FROM users');
+    await query('DELETE FROM doctors');
+
+    const d1 = await queryOne<{ id: number }>(`INSERT INTO doctors (name) VALUES ('Dupont') RETURNING id`);
+    await setAccount(d1!.id, 'Dupont', 'pass1');
+    const d2 = await queryOne<{ id: number }>(`INSERT INTO doctors (name) VALUES ('DUPONT') RETURNING id`);
+
+    await expect(setAccount(d2!.id, 'DUPONT', 'pass2')).rejects.toThrow();
+
+    // d1's account is untouched and still works.
+    const rows = await query<{ doctor_id: number | null; password_hash: string }>(
+      `SELECT doctor_id, password_hash FROM users WHERE lower(username) = 'dupont'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].doctor_id).toBe(d1!.id);
+    expect(bcrypt.compareSync('pass1', rows[0].password_hash)).toBe(true);
   });
 });
