@@ -74,6 +74,10 @@ export async function updateDoctor(id: number, patch: Record<string, unknown>): 
 }
 
 export async function deleteDoctor(id: number): Promise<void> {
+  // Delete the login account too: the FK only sets doctor_id to NULL, and the orphaned
+  // row would keep the username taken forever (blocking account creation if a doctor
+  // with the same name is ever re-created).
+  await query(`DELETE FROM users WHERE doctor_id = $1 AND role = 'medecin'`, [id]);
   await query(`DELETE FROM doctors WHERE id = $1`, [id]);
 }
 
@@ -87,6 +91,18 @@ export async function setAccount(doctorId: number, username: string, password: s
   // returns the stale row. Delete any existing rows for this doctor — including any
   // duplicates left by earlier renames — and recreate a single fresh one.
   await query(`DELETE FROM users WHERE doctor_id = $1 AND role = 'medecin'`, [doctorId]);
+  // Also reclaim the username from ORPHANED rows only (doctor deleted long ago, the FK
+  // left doctor_id NULL) — otherwise the INSERT crashes on unique(username). Login is
+  // case-insensitive, so match case-insensitively too.
+  await query(
+    `DELETE FROM users WHERE lower(username) = lower($1) AND role = 'medecin' AND doctor_id IS NULL`,
+    [username],
+  );
+  // If the username is still taken it belongs to a LIVE account (another doctor with a
+  // case-variant name, or an admin). Never delete it silently — fail loudly instead.
+  // (unique(username) is case-sensitive, so it would NOT catch case-variant clashes.)
+  const clash = await queryOne(`SELECT 1 FROM users WHERE lower(username) = lower($1)`, [username]);
+  if (clash) throw new Error(`Le nom d'utilisateur « ${username} » est déjà pris par un autre compte.`);
   await query(
     `INSERT INTO users (username, password_hash, role, doctor_id, must_change_password)
      VALUES ($1, $2, 'medecin', $3, true)`,

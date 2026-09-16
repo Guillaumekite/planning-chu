@@ -146,8 +146,10 @@ export default function AdminClient() {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ generatePassword: true, username: d.name }),
     });
-    const data = await res.json();
-    if (res.ok && data.password) { setCredential({ name: d.name, password: data.password }); await loadDoctors(); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.password) { alert(data.error ?? 'Échec de la création du compte. Réessaie ou reconnecte-toi.'); return; }
+    setCredential({ name: d.name, password: data.password });
+    await loadDoctors();
   }
 
   async function generate() {
