@@ -6,6 +6,8 @@ import AdminNav from '@/components/AdminNav';
 import { MONTHS_FR } from '@/lib/store';
 import PlanningGrid, { type GridDay } from '@/components/PlanningGrid';
 import PostCounterTable from '@/components/PostCounterTable';
+import CellEditor from '@/components/CellEditor';
+import { checkGrid, recomputeEquity, type Grid, type GridEquity } from '@/lib/grid-checks';
 import { weekdayOf, daysInMonth } from '@/engine/calendar';
 
 type Doctor = {
@@ -22,6 +24,27 @@ type GenResult =
   | { error: string };
 // A published planning as returned by GET /api/plannings (snake_case column names).
 type PublishedPlanning = { days: ApiDay[]; grid: Record<string, Record<number, string>>; garde_equity: Equity | null };
+// Édition manuelle en cours (brouillon généré OU planning déjà publié).
+type EditState = {
+  source: 'draft' | 'published';
+  days: ApiDay[];
+  baseGrid: Grid;    // grille d'origine (diff visuel + annulation)
+  grid: Grid;        // grille en cours d'édition
+  baseEquity: GridEquity | null; // équité d'origine — porte le report des mois précédents
+  doctors: string[];
+};
+
+// Clés `doc|day` des cases qui diffèrent entre la grille d'origine et l'éditée.
+function diffKeys(base: Grid, grid: Grid): Set<string> {
+  const keys = new Set<string>();
+  for (const doc of new Set([...Object.keys(base), ...Object.keys(grid)])) {
+    const a = base[doc] ?? {}, b = grid[doc] ?? {};
+    for (const day of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if ((a[Number(day)] ?? '') !== (b[Number(day)] ?? '')) keys.add(`${doc}|${day}`);
+    }
+  }
+  return keys;
+}
 
 function parseDays(s: string): number[] {
   return s.split(/[,\s]+/).map((x) => parseInt(x, 10)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 31);
@@ -53,6 +76,11 @@ export default function AdminClient() {
   const [credential, setCredential] = useState<{ name: string; password: string } | null>(null);
   const [publishMsg, setPublishMsg] = useState('');
   const [publishedPlanning, setPublishedPlanning] = useState<PublishedPlanning | null>(null);
+  const [edit, setEdit] = useState<EditState | null>(null);
+  const [selCell, setSelCell] = useState<{ doc: string; day: number } | null>(null);
+  // Publication demandée alors que des avertissements existent : le 1er clic arme la
+  // confirmation (« passer outre »), le 2e publie. Désarmée à chaque changement.
+  const [confirmPublish, setConfirmPublish] = useState(false);
 
   const loadDoctors = useCallback(async () => {
     const res = await fetch('/api/doctors');
@@ -82,6 +110,7 @@ export default function AdminClient() {
     if (m < 1) { m = 12; y -= 1; } else if (m > 12) { m = 1; y += 1; }
     setMonth(m); setYear(y);
     setResult(null); setPublishMsg('');
+    setEdit(null); setSelCell(null); setConfirmPublish(false);
   }
 
   async function addDoctor() {
@@ -123,6 +152,7 @@ export default function AdminClient() {
 
   async function generate() {
     setResult(null);
+    setEdit(null); setSelCell(null); setConfirmPublish(false);
     if (active.length < 2) { setResult({ error: 'Sélectionne au moins 2 médecins pour ce mois (case « Ce mois »).' }); return; }
     const availRes = await fetch(`/api/availability?year=${year}&month=${month}`);
     const availData = availRes.ok ? await availRes.json() : {};
@@ -170,16 +200,60 @@ export default function AdminClient() {
     } finally { setLoading(false); }
   }
 
-  async function publish() {
-    if (!result || !('status' in result) || result.status !== 'feasible') return;
+  // ---- Édition manuelle (brouillon ou publié) ----
+
+  // Règles de profil par nom de médecin, pour les vérifications de la grille éditée.
+  const rulesByName = Object.fromEntries(
+    doctors.map((d) => [d.name, { forceG2: d.force_g2, noS: d.no_s, noHC: d.no_hc }]),
+  );
+  const editWarnings = edit ? checkGrid(edit.days, edit.grid, rulesByName) : [];
+  const editEquity = edit ? recomputeEquity(edit.days, edit.grid, edit.baseEquity) : null;
+  const editedKeys = edit ? diffKeys(edit.baseGrid, edit.grid) : undefined;
+
+  function startEdit(source: 'draft' | 'published') {
+    if (source === 'draft' && draft) {
+      setEdit({
+        source, days: draft.days,
+        baseGrid: structuredClone(draft.grid), grid: structuredClone(draft.grid),
+        baseEquity: draft.gardeEquity as unknown as GridEquity,
+        doctors: active.map((d) => d.name),
+      });
+    } else if (source === 'published' && publishedPlanning) {
+      setEdit({
+        source, days: publishedPlanning.days,
+        baseGrid: structuredClone(publishedPlanning.grid), grid: structuredClone(publishedPlanning.grid),
+        baseEquity: publishedPlanning.garde_equity as unknown as GridEquity | null,
+        doctors: publishedDoctors(publishedPlanning),
+      });
+    } else return;
+    setSelCell(null); setConfirmPublish(false); setPublishMsg('');
+  }
+  function cancelEdit() {
+    setEdit(null); setSelCell(null); setConfirmPublish(false);
+  }
+  function setCell(doc: string, day: number, raw: string) {
+    setEdit((prev) => {
+      if (!prev) return prev;
+      const grid = structuredClone(prev.grid);
+      if (raw) (grid[doc] ??= {})[day] = raw;
+      else if (grid[doc]) delete grid[doc][day];
+      return { ...prev, grid };
+    });
+    setConfirmPublish(false);
+  }
+
+  // Publie une grille (brouillon tel quel, ou grille éditée). S'il reste des avertissements,
+  // le 1er clic arme la confirmation « passer outre » et le 2e clic publie vraiment.
+  async function publishGrid(grid: Grid, days: ApiDay[], gardeEquity: unknown, warnings: string[]) {
+    if (warnings.length > 0 && !confirmPublish) { setConfirmPublish(true); return; }
     setPublishMsg('');
     const res = await fetch('/api/plannings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ year, month, grid: result.grid, days: result.days, gardeEquity: result.gardeEquity }),
+      body: JSON.stringify({ year, month, grid, days, gardeEquity }),
     });
     setPublishMsg(res.ok ? '✓ Planning publié — consultable via le code d\'accès.' : 'Échec de la publication.');
     // Reload from DB and drop the draft so the persistent published view (filled grid + export) takes over.
-    if (res.ok) { await loadPublished(); setResult(null); }
+    if (res.ok) { await loadPublished(); setResult(null); setEdit(null); setSelCell(null); setConfirmPublish(false); }
   }
 
   return (
@@ -314,10 +388,65 @@ export default function AdminClient() {
           <Banner><p className="font-semibold">Mois infaisable</p><p className="mt-1">{result.reason}</p><p className="mt-1 text-sm">Éligibles : {result.eligible.join(', ') || '—'}</p></Banner>
         )}
 
-        {draft ? (
+        {edit && editEquity ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => publishGrid(edit.grid, edit.days, editEquity, editWarnings)}
+                className={`rounded px-5 py-2 text-sm font-medium text-white ${confirmPublish ? 'bg-red-600 hover:bg-red-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+              >
+                {confirmPublish
+                  ? `⚠️ Confirmez-vous de publier malgré ${editWarnings.length} avertissement(s) ?`
+                  : edit.source === 'published' ? 'Republier avec ces modifications' : 'Publier ce planning'}
+              </button>
+              {confirmPublish && (
+                <button onClick={() => setConfirmPublish(false)} className="rounded border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50">non, revenir</button>
+              )}
+              <button onClick={cancelEdit} className="rounded border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50">Annuler les modifications</button>
+              <span className="text-sm text-gray-500">
+                Mode édition — clique une case pour la modifier. {editedKeys?.size ?? 0} case(s) modifiée(s).
+              </span>
+              {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
+            </div>
+            {editWarnings.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">⚠️ Avertissements ({editWarnings.length}) — publication possible après confirmation</p>
+                <ul className="mt-1 list-disc pl-5">
+                  {editWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            )}
+            {selCell && (
+              <CellEditor
+                doc={selCell.doc} day={selCell.day}
+                value={edit.grid[selCell.doc]?.[selCell.day] ?? ''}
+                onChange={(raw) => setCell(selCell.doc, selCell.day, raw)}
+                onClose={() => setSelCell(null)}
+              />
+            )}
+            <PlanningGrid
+              days={edit.days} grid={edit.grid} doctors={edit.doctors}
+              editable selected={selCell} editedKeys={editedKeys}
+              onCellClick={(doc, day) => setSelCell({ doc, day })}
+            />
+            <PostCounterTable days={edit.days} grid={edit.grid} />
+            <EquityTable equity={editEquity} doctors={edit.doctors} />
+          </div>
+        ) : draft ? (
           <div className="space-y-6">
-            <div className="flex items-center gap-3">
-              <button onClick={publish} className="rounded bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700">Publier ce planning</button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => publishGrid(draft.grid, draft.days, draft.gardeEquity, draft.warnings ?? [])}
+                className={`rounded px-5 py-2 text-sm font-medium text-white ${confirmPublish ? 'bg-red-600 hover:bg-red-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+              >
+                {confirmPublish
+                  ? `⚠️ Confirmez-vous de publier malgré ${(draft.warnings ?? []).length} avertissement(s) ?`
+                  : 'Publier ce planning'}
+              </button>
+              {confirmPublish && (
+                <button onClick={() => setConfirmPublish(false)} className="rounded border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50">non, revenir</button>
+              )}
+              <button onClick={() => startEdit('draft')} className="rounded border border-blue-600 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50">✎ Modifier</button>
               {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
               <span className="text-sm text-gray-500">Brouillon généré, non encore publié.</span>
             </div>
@@ -335,6 +464,10 @@ export default function AdminClient() {
           </div>
         ) : publishedPlanning ? (
           <div className="space-y-6">
+            <div className="flex items-center gap-3">
+              <button onClick={() => startEdit('published')} className="rounded border border-blue-600 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50">✎ Modifier ce planning publié</button>
+              {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
+            </div>
             <PlanningGrid days={publishedPlanning.days} grid={publishedPlanning.grid} doctors={publishedDoctors(publishedPlanning)} />
             <PostCounterTable days={publishedPlanning.days} grid={publishedPlanning.grid} />
             {publishedPlanning.garde_equity && <EquityTable equity={publishedPlanning.garde_equity} doctors={publishedDoctors(publishedPlanning)} />}
