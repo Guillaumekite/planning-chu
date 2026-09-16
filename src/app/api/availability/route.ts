@@ -12,9 +12,8 @@ export async function GET(req: Request) {
   const year = Number(url.searchParams.get('year'));
   const month = Number(url.searchParams.get('month'));
   if (!Number.isInteger(year) || !Number.isInteger(month)) return NextResponse.json({ error: 'Paramètres invalides' }, { status: 400 });
-  // Admins see everyone; a doctor sees only their own row.
-  const doctorId = s.role === 'admin' ? undefined : s.doctorId ?? -1;
-  return NextResponse.json(await getAvailability(year, month, doctorId));
+  // Everyone sees every row (a doctor gets the others read-only); writes stay restricted in PUT.
+  return NextResponse.json(await getAvailability(year, month));
 }
 
 const PutBody = z.object({

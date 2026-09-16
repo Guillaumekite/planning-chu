@@ -36,7 +36,8 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     fetch('/api/doctors').then((r) => (r.ok ? r.json() : { doctors: [] })).then((d) => {
       const all: Doc[] = (d.doctors ?? []).map((x: { id: number; name: string; universitaire?: boolean; part_time?: boolean }) =>
         ({ id: x.id, name: x.name, universitaire: !!x.universitaire, partTime: !!x.part_time }));
-      setDoctors(isAdmin ? all : all.filter((x) => x.id === doctorId));
+      // Un médecin voit tout le monde (lecture seule) avec sa propre ligne en premier.
+      setDoctors(isAdmin ? all : [...all.filter((x) => x.id === doctorId), ...all.filter((x) => x.id !== doctorId)]);
     });
   }, [isAdmin, doctorId]);
 
@@ -58,13 +59,20 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     || JSON.stringify(savedTp) !== JSON.stringify(pendingTp);
   const stateOf = (name: string, day: number): Availability => pending[name]?.[day] ?? 'dispo';
   const univOf = (name: string, day: number): boolean => !!pendingUniv[name]?.[day];
+  // Un médecin ne peut modifier que sa propre ligne ; les autres sont en lecture seule.
+  const canEdit = (doc: Doc) => isAdmin || doc.id === doctorId;
+  const self = doctors.find((d) => d.id === doctorId);
   // The Univ brush is ALWAYS offered to the admin (even before any doctor has the flag, so the
-  // button is discoverable); for doctors it appears once at least one universitaire exists.
-  const hasUniversitaire = isAdmin || doctors.some((d) => d.universitaire);
+  // button is discoverable); for a doctor it appears only if their own row is universitaire —
+  // the other rows are read-only, so the brush would be useless otherwise.
+  const hasUniversitaire = isAdmin || !!self?.universitaire;
   const tpOf = (name: string, day: number): boolean => !!pendingTp[name]?.[day];
-  // The TP brush is offered to the admin always (discoverable) and to a doctor only when at least
-  // one part-timer exists — exactly like the Univ brush for universitaire doctors.
-  const hasPartTime = isAdmin || doctors.some((d) => d.partTime);
+  // The TP brush is offered to the admin always (discoverable) and to a doctor only if their own
+  // row is part-time — exactly like the Univ brush for universitaire doctors.
+  const hasPartTime = isAdmin || !!self?.partTime;
+  // Les légendes, elles, s'affichent dès qu'une ligne visible porte le marqueur.
+  const showUnivLegend = hasUniversitaire || doctors.some((d) => d.universitaire);
+  const showTpLegend = hasPartTime || doctors.some((d) => d.partTime);
 
   function cellLook(name: string, day: number): { label: string; cls: string } {
     const st = stateOf(name, day);
@@ -106,9 +114,13 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   const m = MONTHS_FR[month - 1].toLowerCase();
   const fmtRange = (r: { start: number; end: number }) =>
     r.start === r.end ? `le ${r.start} ${m}` : `du ${r.start} au ${r.end} ${m}`;
-  const anyRefused = doctors.some((d) => refusedRuns(d.name).length > 0);
+  // Le récap des refus reste personnel pour un médecin (le motif des autres n'y a pas sa place).
+  const recapDoctors = isAdmin ? doctors : doctors.filter((d) => d.id === doctorId);
+  const anyRefused = recapDoctors.some((d) => refusedRuns(d.name).length > 0);
 
   function apply(name: string, day: number) {
+    const doc = doctors.find((d) => d.name === name);
+    if (!doc || !canEdit(doc)) return;
     setSavedMsg('');
     if (brush === 'univ') {
       // Univ days are only meaningful for universitaire doctors — ignore clicks on other rows.
@@ -208,7 +220,13 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       </div>
       <p className="mb-4 text-sm text-gray-500">
         Choisis un état, applique-le sur les jours, puis clique <b>Enregistrer</b>.
+        {!isAdmin && <> Ta ligne est en haut ; celles des autres médecins sont affichées à titre indicatif (lecture seule).</>}
       </p>
+      {!isAdmin && doctorId == null && (
+        <p className="mb-4 rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-800">
+          Ton compte n&apos;est pas relié à une fiche médecin : tout est en lecture seule. Contacte l&apos;administrateur.
+        </p>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="text-sm text-gray-500">État :</span>
@@ -247,7 +265,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       </div>
 
       {doctors.length === 0 ? (
-        <p className="text-sm text-gray-400">{isAdmin ? 'Aucun médecin.' : 'Ton compte n’est pas relié à une fiche médecin. Contacte l’administrateur.'}</p>
+        <p className="text-sm text-gray-400">Aucun médecin.</p>
       ) : (
         // Calendrier en ligne : 1er → fin du mois sur une ligne par médecin.
         <div className="overflow-x-auto rounded-lg border border-gray-200">
@@ -264,18 +282,22 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
               </tr>
             </thead>
             <tbody>
-              {doctors.map((doc) => (
-                <tr key={doc.id}>
-                  <td className="sticky left-0 z-10 border-r border-gray-200 bg-white px-2 py-1.5 text-left font-medium whitespace-nowrap">{doc.name}</td>
-                  {days.map((d) => {
-                    const c = cellLook(doc.name, d.day);
-                    const refused = conge[doc.name]?.[d.day] === 'refused';
-                    const note = refused ? congeNote[doc.name]?.[d.day] : undefined;
-                    const title = refused ? (note ? `Congé refusé — motif : ${note}` : 'Congé refusé') : undefined;
-                    return <td key={d.day} title={title} onClick={() => apply(doc.name, d.day)} className={`h-9 w-9 min-w-9 cursor-pointer border border-gray-100 p-0 text-xs ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
-                  })}
-                </tr>
-              ))}
+              {doctors.map((doc) => {
+                const editable = canEdit(doc);
+                const mine = !isAdmin && doc.id === doctorId;
+                return (
+                  <tr key={doc.id}>
+                    <td className={`sticky left-0 z-10 border-r border-gray-200 px-2 py-1.5 text-left whitespace-nowrap ${mine ? 'bg-blue-50 font-semibold text-blue-900' : 'bg-white font-medium'}`}>{doc.name}</td>
+                    {days.map((d) => {
+                      const c = cellLook(doc.name, d.day);
+                      const refused = conge[doc.name]?.[d.day] === 'refused';
+                      const note = refused ? congeNote[doc.name]?.[d.day] : undefined;
+                      const title = refused ? (note ? `Congé refusé — motif : ${note}` : 'Congé refusé') : undefined;
+                      return <td key={d.day} title={title} onClick={editable ? () => apply(doc.name, d.day) : undefined} className={`h-9 w-9 min-w-9 border border-gray-100 p-0 text-xs ${editable ? 'cursor-pointer' : 'cursor-default'} ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -291,7 +313,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3">
           <p className="mb-1 text-sm font-semibold text-red-800">Congés refusés — {MONTHS_FR[month - 1]} {year}</p>
           <ul className="space-y-1 text-sm text-red-700">
-            {doctors.flatMap((doc) => refusedRuns(doc.name).map((r, i) => (
+            {recapDoctors.flatMap((doc) => refusedRuns(doc.name).map((r, i) => (
               <li key={`${doc.id}-${i}`}>
                 {isAdmin && <span className="font-medium">{doc.name} — </span>}
                 <span>{fmtRange(r)}</span>
@@ -301,13 +323,13 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
           </ul>
         </div>
       )}
-      {hasUniversitaire && (
+      {showUnivLegend && (
         <p className="mt-1 text-sm text-gray-500">
           <span className="rounded px-1 ring-2 ring-inset ring-indigo-500">U</span> Contrainte université : marqueur
           indépendant (anneau indigo) — se cumule avec une préférence de garde (G+/G−) sur le même jour.
         </p>
       )}
-      {hasPartTime && (
+      {showTpLegend && (
         <p className="mt-1 text-sm text-gray-500">
           <span className="rounded px-1 ring-2 ring-inset ring-emerald-500">TP</span> Jour qu&apos;un
           médecin à temps partiel ne souhaite <b>pas</b> travailler : marqueur indépendant (anneau
