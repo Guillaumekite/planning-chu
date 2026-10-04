@@ -7,7 +7,7 @@ import { postLabel, postStyle } from '@/lib/store';
 
 // Postes de jour proposés — les demandes de l'admin d'abord, puis le reste des codes.
 const PRIMARY_POSTS = ['BM', 'S', 'CS1', 'CS2', 'Ped', 'U', 'G1', 'G2'] as const;
-const OTHER_POSTS = ['BM-BS', 'MM-MS', 'MM', 'ACU', 'CD', 'HC', 'P', 'RS', 'CA', 'ABS'] as const;
+const OTHER_POSTS = ['BM-BS', 'MM-MS', 'MM', 'ACU', 'CD', 'HC', 'P', 'IRM', 'RS', 'CA', 'ABS'] as const;
 
 // La garde du soir ne se combine qu'avec un vrai poste de jour (pas vide, pas une
 // garde pure, pas un repos/absence) — mêmes combinaisons que le générateur (U+G1, ACU+G2…).

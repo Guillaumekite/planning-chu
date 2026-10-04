@@ -24,6 +24,7 @@ const PatchBody = z.object({
   no_s: z.boolean().optional(), // jamais le poste S
   no_hc: z.boolean().optional(), // jamais le poste HC (hors clinique)
   presence: z.boolean().optional(), // éligible au poste P
+  irm: z.boolean().optional(), // habilité au poste IRM (mardis sauf le dernier)
   password: z.string().min(1).optional(), // (re)set the doctor's login password
   username: z.string().min(1).optional(),
   generatePassword: z.boolean().optional(), // auto-generate and return a new password
