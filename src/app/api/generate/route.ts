@@ -22,6 +22,7 @@ const ProfileSchema = z.object({
   noS: z.boolean().optional(), // jamais le poste S
   noHC: z.boolean().optional(), // jamais le poste HC (hors clinique) — ex. Dzierzek
   presence: z.boolean().optional(), // éligible au poste P (≥ 12 travaillants)
+  irm: z.boolean().optional(), // habilité au poste IRM (mardis sauf le dernier)
 });
 
 const BodySchema = z.object({

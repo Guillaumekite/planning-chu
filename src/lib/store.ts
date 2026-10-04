@@ -98,7 +98,10 @@ export function postStyle(post: string | undefined): string {
   if (post && post.startsWith('ACU')) return 'bg-lime-100 text-lime-700'; // 'ACU' or 'ACU+G2'
   if (post && post.startsWith('U+')) return 'bg-indigo-200 text-indigo-800 font-semibold'; // 'U+G1' / 'U+G2'
   if (post && post.startsWith('P+')) return 'bg-pink-200 text-pink-800 font-semibold'; // 'P+G1' / 'P+G2' (P le jour, garde le soir)
+  if (post && post.startsWith('IRM+')) return 'bg-sky-200 text-sky-800 font-semibold'; // 'IRM+G1' / 'IRM+G2' (IRM le jour, garde le soir)
   switch (post) {
+    case 'IRM':
+      return 'bg-sky-100 text-sky-700';
     case 'BM-BS':
       return 'bg-purple-100 text-purple-700 font-medium'; // bloc journée 7h30-18h
     case 'MM-MS':

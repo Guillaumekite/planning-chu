@@ -890,3 +890,63 @@ describe('solvePlanning — P par jour + remplacements BM-BS / MM-MS (accord 14/
     expect(seen).toBeGreaterThan(0);
   });
 });
+
+describe('solvePlanning — IRM (tous les mardis sauf le dernier)', () => {
+  const IRM_CELLS = ['IRM', 'IRM+G1', 'IRM+G2'];
+  const hasIrm = (grid: Record<string, Record<number, string>>, docs: string[], day: number) =>
+    docs.some((d) => IRM_CELLS.includes(grid[d][day] ?? ''));
+
+  it('place un (et un seul) IRM chaque mardi SAUF le dernier du mois ; jamais les autres jours', async () => {
+    const docs = doctors(14);
+    const profiles = Object.fromEntries(docs.map((d) => [d, { irm: true } as DoctorProfile]));
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: docs, profiles });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const tuesdays = res.days.filter((cd) => cd.weekday === 1).map((cd) => cd.day);
+    const lastTuesday = Math.max(...tuesdays);
+    for (const cd of res.days) {
+      const count = docs.filter((d) => IRM_CELLS.includes(res.grid[d][cd.day] ?? '')).length;
+      const expected = cd.weekday === 1 && cd.day !== lastTuesday && !cd.isHoliday ? 1 : 0;
+      expect(count, `IRM le jour ${cd.day} (mardi=${cd.weekday === 1}, dernier=${cd.day === lastTuesday})`).toBe(expected);
+    }
+  });
+
+  it('IRM compatible garde : IRM+G1 ⇒ BM-BS le jour, IRM+G2 ⇒ MM-MS (option B)', async () => {
+    const docs = doctors(14);
+    // D01 seul habilité IRM, avec un G+ le mardi 6 (non-dernier) : l'IRM du jour DOIT être lui.
+    const res = await solvePlanning({
+      year: 2026, month: 10, doctors: docs,
+      profiles: { D01: { irm: true } },
+      availability: { D01: { 6: 'souhait_garde' } },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const cell = res.grid.D01[6];
+    expect(['IRM+G1', 'IRM+G2']).toContain(cell);
+    const cells6 = docs.map((d) => res.grid[d][6] ?? '');
+    if (cell === 'IRM+G1') expect(cells6).toContain('BM-BS');
+    else expect(cells6).toContain('MM-MS');
+  });
+
+  it('IRM ne remplace jamais un congé : seul habilité en congé un mardi ⇒ non pourvu + avertissement', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({
+      year: 2026, month: 10, doctors: docs,
+      profiles: { D01: { irm: true } },
+      availability: { D01: { 13: 'conge' } }, // mardi 13 (non-dernier)
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.grid.D01[13]).toBe('CA');
+    expect(hasIrm(res.grid, docs, 13)).toBe(false);
+    expect(res.warnings.some((w) => w.includes('IRM non pourvu le 13'))).toBe(true);
+    // Les autres mardis non-derniers restent pourvus par D01.
+    expect(res.grid.D01[6]).toBe('IRM');
+    expect(res.grid.D01[20]).toBe('IRM');
+  });
+
+  it('aucun médecin habilité ⇒ jamais d\'IRM et aucun avertissement IRM', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({ year: 2026, month: 10, doctors: docs });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    for (const cd of res.days) expect(hasIrm(res.grid, docs, cd.day)).toBe(false);
+    expect(res.warnings.some((w) => w.includes('IRM non pourvu'))).toBe(false);
+  });
+});

@@ -34,6 +34,8 @@ ALTER TABLE doctors ADD COLUMN IF NOT EXISTS no_s boolean NOT NULL DEFAULT false
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS no_hc boolean NOT NULL DEFAULT false;
 -- "P" : éligible au poste Présence (posé seulement quand ≥ 12 travaillants).
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS presence boolean NOT NULL DEFAULT false;
+-- "IRM" : habilité au poste IRM (posé chaque mardi sauf le dernier mardi du mois).
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS irm boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS users (
   id                   serial PRIMARY KEY,

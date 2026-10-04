@@ -27,11 +27,12 @@ export type DoctorRow = {
   no_s: boolean;
   no_hc: boolean;
   presence: boolean;
+  irm: boolean;
   has_account: boolean;
 };
 
 const DOCTOR_COLS =
-  'universitaire, university_ratio, part_time, part_time_ratio, acupuncture, acu_lundi, acu_mercredi, douleur_poids, force_g2, no_s, no_hc, presence';
+  'universitaire, university_ratio, part_time, part_time_ratio, acupuncture, acu_lundi, acu_mercredi, douleur_poids, force_g2, no_s, no_hc, presence, irm';
 
 export async function listDoctors(): Promise<DoctorRow[]> {
   await ensureSchema();
@@ -56,7 +57,7 @@ export async function createDoctor(name: string): Promise<DoctorRow> {
 
 const EDITABLE = [
   'name', 'universitaire', 'university_ratio', 'part_time', 'part_time_ratio',
-  'acupuncture', 'acu_lundi', 'acu_mercredi', 'douleur_poids', 'force_g2', 'no_s', 'no_hc', 'presence',
+  'acupuncture', 'acu_lundi', 'acu_mercredi', 'douleur_poids', 'force_g2', 'no_s', 'no_hc', 'presence', 'irm',
 ] as const;
 
 export async function updateDoctor(id: number, patch: Record<string, unknown>): Promise<void> {
