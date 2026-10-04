@@ -11,12 +11,10 @@ const NOT_WORKING = new Set(['G1', 'G2', 'RS', 'CA', 'ABS', '']);
 
 // Réunions qui se posent PAR-DESSUS le poste de journée d'un médecin :
 //   mardi    → biblio (matin) + staff (après-midi)
-//   mercredi → réunion (après-midi)
 //   vendredi → staff (après-midi)
 function meetings(weekday: number, post: string | undefined): { morning: string; afternoon: string } {
   if (!post || NOT_WORKING.has(post)) return { morning: '', afternoon: '' };
   if (weekday === 1) return { morning: 'biblio', afternoon: 'staff' }; // mardi
-  if (weekday === 2) return { morning: '', afternoon: 'réunion' };     // mercredi
   if (weekday === 4) return { morning: '', afternoon: 'staff' };       // vendredi
   return { morning: '', afternoon: '' };
 }
