@@ -89,7 +89,10 @@ export default function AdminClient() {
   const [publishHoles, setPublishHoles] = useState<number[] | null>(null);
   // Équité V2 (solde) : interrupteur global + solde d'entrée du mois affiché (admin seulement).
   const [equityV2, setEquityV2] = useState<boolean | null>(null);
-  const [soldeInfo, setSoldeInfo] = useState<SoldeInfo | null>(null);
+  // Solde reçu, étiqueté par son mois : un changement de mois invalide la donnée SANS reset
+  // synchrone dans l'effet (la valeur affichée est dérivée au rendu).
+  const [soldeFetched, setSoldeFetched] = useState<{ key: string; data: SoldeInfo } | null>(null);
+  const soldeInfo = equityV2 === true && soldeFetched?.key === `${year}-${month}` ? soldeFetched.data : null;
 
   const loadDoctors = useCallback(async () => {
     const res = await fetch('/api/doctors');
@@ -111,10 +114,10 @@ export default function AdminClient() {
     fetch('/api/config').then(async (r) => { if (r.ok) setEquityV2((await r.json()).equityV2); });
   }, []);
   useEffect(() => {
-    setSoldeInfo(null);
     if (equityV2 !== true) return;
+    const key = `${year}-${month}`;
     fetch(`/api/solde?year=${year}&month=${month}`).then(async (r) => {
-      if (r.ok) setSoldeInfo((await r.json()) as SoldeInfo);
+      if (r.ok) setSoldeFetched({ key, data: (await r.json()) as SoldeInfo });
     });
   }, [year, month, equityV2]);
 
@@ -308,24 +311,6 @@ export default function AdminClient() {
     await loadPublished(); setResult(null); setEdit(null); setSelCell(null); setConfirmPublish(false); setPublishHoles(null);
   }
 
-  // Bandeau rouge du garde-fou : liste des jours troués + bouton de contournement explicite.
-  function HolesBanner({ onForce }: { onForce: () => void }) {
-    if (!publishHoles) return null;
-    return (
-      <div className="rounded-lg border border-red-400 bg-red-50 p-3 text-sm text-red-900">
-        <p className="font-semibold">
-          ⛔ Publication bloquée : {publishHoles.length} jour(s) sans garde complète (1 G1 + 1 G2) — jours {publishHoles.join(', ')}.
-        </p>
-        <p className="mt-1">Complète ces jours (✎ Modifier), ou publie en connaissance de cause : les compteurs d&apos;équité du mois suivant seront faussés.</p>
-        <div className="mt-2 flex items-center gap-2">
-          <button onClick={onForce} className="rounded bg-red-600 px-4 py-1.5 font-medium text-white hover:bg-red-700">
-            Publier malgré {publishHoles.length} jour(s) sans garde complète
-          </button>
-          <button onClick={() => setPublishHoles(null)} className="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50">non, revenir</button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <main className="mx-auto max-w-[1400px] p-6 font-sans text-gray-900">
@@ -492,7 +477,7 @@ export default function AdminClient() {
               </span>
               {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
             </div>
-            <HolesBanner onForce={() => publishGrid(edit.grid, edit.days, editEquity, editWarnings, true)} />
+            <HolesBanner holes={publishHoles} onForce={() => publishGrid(edit.grid, edit.days, editEquity, editWarnings, true)} onCancel={() => setPublishHoles(null)} />
             {editWarnings.length > 0 && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                 <p className="font-semibold">⚠️ Avertissements ({editWarnings.length}) — publication possible après confirmation</p>
@@ -535,7 +520,7 @@ export default function AdminClient() {
               {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
               <span className="text-sm text-gray-500">Brouillon généré, non encore publié.</span>
             </div>
-            <HolesBanner onForce={() => publishGrid(draft.grid, draft.days, draft.gardeEquity, draft.warnings ?? [], true)} />
+            <HolesBanner holes={publishHoles} onForce={() => publishGrid(draft.grid, draft.days, draft.gardeEquity, draft.warnings ?? [], true)} onCancel={() => setPublishHoles(null)} />
             {draft.warnings && draft.warnings.length > 0 && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                 <p className="font-semibold">⚠️ À vérifier avant de publier ({draft.warnings.length})</p>
@@ -611,4 +596,23 @@ function EquityTable({ equity, doctors, solde }: { equity: Equity; doctors: stri
 
 function Banner({ children }: { children: React.ReactNode }) {
   return <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-red-800">⛔ {children}</div>;
+}
+
+// Bandeau rouge du garde-fou de publication : jours sans 1 G1 + 1 G2, contournement explicite.
+function HolesBanner({ holes, onForce, onCancel }: { holes: number[] | null; onForce: () => void; onCancel: () => void }) {
+  if (!holes) return null;
+  return (
+    <div className="rounded-lg border border-red-400 bg-red-50 p-3 text-sm text-red-900">
+      <p className="font-semibold">
+        ⛔ Publication bloquée : {holes.length} jour(s) sans garde complète (1 G1 + 1 G2) — jours {holes.join(', ')}.
+      </p>
+      <p className="mt-1">Complète ces jours (✎ Modifier), ou publie en connaissance de cause : les compteurs d&apos;équité du mois suivant seront faussés.</p>
+      <div className="mt-2 flex items-center gap-2">
+        <button onClick={onForce} className="rounded bg-red-600 px-4 py-1.5 font-medium text-white hover:bg-red-700">
+          Publier malgré {holes.length} jour(s) sans garde complète
+        </button>
+        <button onClick={onCancel} className="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50">non, revenir</button>
+      </div>
+    </div>
+  );
 }
