@@ -68,6 +68,13 @@ export interface GardeInput {
   minTwo?: DoctorId[];
   /** Doctors that must ALWAYS be G2 (never G1) when on garde — e.g. the acupuncture doctor. */
   forceG2?: DoctorId[];
+  /** Mode d'équité du COMPTAGE (spec 2026-10-21). `'carry'` (défaut) = rattrapage historique
+   * sur le dernier mois publié (±1, cibles arrondies). `'solde'` = cibles ENTIÈRES floor/ceil
+   * de la part (écart ≤ 1 à poids égal) ; le `solde` décide qui reçoit les cibles hautes. */
+  equityMode?: 'carry' | 'solde';
+  /** Par médecin : solde cumulé (gardes faites − dues) depuis l'ancrage — négatif = en retard.
+   * Utilisé seulement en mode `'solde'`. Absent = 0 (neutre). */
+  solde?: Record<DoctorId, number>;
   weights?: Partial<GardeWeights>;
   /** Solver time budget per month (seconds). Default 6. */
   timeLimitSec?: number;
