@@ -47,6 +47,31 @@ export async function getPublished(year: number, month: number): Promise<Plannin
   } as PlanningRow;
 }
 
+/** Les plannings publiés de `from` (inclus) à `before` (exclu), en ordre chronologique —
+ * nourrit le solde de gardes (équité V2) : les mois publiés APRÈS le mois généré (publication
+ * en avance) sont exclus, l'ancrage borne le début. */
+export async function listPublishedBetween(
+  from: { year: number; month: number },
+  before: { year: number; month: number },
+): Promise<PlanningRow[]> {
+  await ensureSchema();
+  const rows = await query<Record<string, unknown>>(
+    `SELECT year, month, grid, days, garde_equity FROM plannings
+     WHERE status = 'published'
+       AND (year * 100 + month) >= $1 AND (year * 100 + month) < $2
+     ORDER BY year, month`,
+    [from.year * 100 + from.month, before.year * 100 + before.month],
+  );
+  const parse = (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v);
+  return rows.map((row) => ({
+    year: row.year as number,
+    month: row.month as number,
+    grid: parse(row.grid),
+    days: parse(row.days),
+    garde_equity: parse(row.garde_equity),
+  }) as PlanningRow);
+}
+
 /** The most recent published planning strictly BEFORE (year, month) — feeds cross-month garde
  * equity: its monthly counters become the next generation's carry. */
 export async function getLatestPublishedBefore(year: number, month: number): Promise<PlanningRow | null> {

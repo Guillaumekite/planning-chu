@@ -190,3 +190,32 @@ describe('database layer (PGlite)', () => {
     expect(bcrypt.compareSync('pass1', rows[0].password_hash)).toBe(true);
   });
 });
+
+describe('équité V2 — accès données (PGlite)', () => {
+  beforeAll(async () => {
+    await ensureSchema();
+  });
+
+  it('listPublishedBetween : bornes ancrage ≤ m < cible, mois postérieurs exclus', async () => {
+    const { savePublished, listPublishedBetween } = await import('@/lib/plannings');
+    await query(`DELETE FROM plannings`);
+    for (const m of [8, 9, 10, 11]) {
+      await savePublished(2026, m, { A: { 1: 'G1' } }, [{ day: 1, weekday: 0, isWeekend: false, isHoliday: false }], {});
+    }
+    const rows = await listPublishedBetween({ year: 2026, month: 9 }, { year: 2026, month: 11 });
+    expect(rows.map((r) => r.month)).toEqual([9, 10]);
+    // Cible ≤ ancrage → vide (régénération d'un mois d'avant l'ancrage).
+    const none = await listPublishedBetween({ year: 2026, month: 9 }, { year: 2026, month: 9 });
+    expect(none).toEqual([]);
+  });
+
+  it('getEquityV2 : true par défaut, bascule via setEquityV2', async () => {
+    const { getEquityV2, setEquityV2 } = await import('@/lib/config');
+    await query(`DELETE FROM app_config WHERE key = 'equity_v2'`);
+    expect(await getEquityV2()).toBe(true); // clé absente = on
+    await setEquityV2(false);
+    expect(await getEquityV2()).toBe(false);
+    await setEquityV2(true);
+    expect(await getEquityV2()).toBe(true);
+  });
+});
