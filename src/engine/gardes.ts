@@ -101,6 +101,39 @@ export function computeGardeTargets(
   return targets;
 }
 
+/**
+ * Cibles ENTIÈRES du mode « solde » (équité V2, spec 2026-10-21) : répartition au plus fort
+ * reste de la part proportionnelle au poids — Σ cibles = totalSlots exactement, chaque cible
+ * ∈ {floor(part), ceil(part)} ⇒ écart garanti ≤ 1 entre médecins de même poids, et chaque
+ * « +1 » a un « −1 » en face (le polissage n'est plus gelé par les égalités parfaites).
+ * Le solde (négatif = en retard) sert de priorité pour QUI reçoit les unités restantes :
+ * priorité = reste fractionnaire − solde, décroissante, nom croissant en départage. Les
+ * unités ne vont qu'aux restes > 0 (un poids nul ou une part entière ne déborde jamais).
+ */
+export function apportionTargets(
+  doctors: DoctorId[],
+  totalSlots: number,
+  weight: Record<DoctorId, number>,
+  solde: Record<DoctorId, number>,
+): Record<DoctorId, number> {
+  const w = (d: DoctorId) => weight[d] ?? 1;
+  const W = doctors.reduce((s, d) => s + w(d), 0) || 1;
+  const targets: Record<DoctorId, number> = {};
+  const rest: { d: DoctorId; frac: number; p: number }[] = [];
+  let used = 0;
+  for (const d of doctors) {
+    const share = (totalSlots * w(d)) / W;
+    targets[d] = Math.floor(share);
+    used += targets[d];
+    const frac = share - targets[d];
+    if (frac > 0) rest.push({ d, frac, p: frac - (solde[d] ?? 0) });
+  }
+  rest.sort((a, b) => (b.p === a.p ? a.d.localeCompare(b.d) : b.p - a.p));
+  // Σ restes = totalSlots − used et chaque reste < 1 ⇒ il y a toujours assez de candidats.
+  for (let i = 0; i < totalSlots - used && i < rest.length; i++) targets[rest[i].d] += 1;
+  return targets;
+}
+
 export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   const weights: GardeWeights = { ...DEFAULT_WEIGHTS, ...(input.weights ?? {}) };
   const days = buildMonth(input.year, input.month, weights, input.holidays ?? []);
@@ -233,9 +266,12 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
         for (const rest2 of [false, true])
           for (const cap7 of [false, true]) levels.push({ cap7, rest2, we3, weDup, dropG });
       }
-  // Cibles mensuelles (part proportionnelle + carry en ratio borné ±1) — consommées par le
-  // MILP (objectif d'équité) puis par la recherche locale.
-  const targets = computeGardeTargets(doctors, 2 * days.length, input.fte ?? {}, carryCount, input.carryWorked ?? {});
+  // Cibles mensuelles — consommées par le MILP (objectif d'équité) puis par la recherche
+  // locale. Mode 'carry' (défaut, inchangé) : part proportionnelle + carry en ratio borné ±1.
+  // Mode 'solde' (équité V2) : cibles entières au plus fort reste, priorisées par le solde.
+  const targets = input.equityMode === 'solde'
+    ? apportionTargets(doctors, 2 * days.length, input.fte ?? {}, input.solde ?? {})
+    : computeGardeTargets(doctors, 2 * days.length, input.fte ?? {}, carryCount, input.carryWorked ?? {});
   let plan: WishPlan = { forced, cap: capHard, weCap: MAX_WEEKEND_GARDES, restGap: 3, weekendDup: false, weekendWishes };
   let feasible: Record<string, boolean> | null = null;
   for (const lv of levels) {

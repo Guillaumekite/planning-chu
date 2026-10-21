@@ -164,3 +164,27 @@ describe('recomputeEquity', () => {
     expect(eq.spread).toBe(1);
   });
 });
+
+describe('missingGardeDays — garde-fou de publication', () => {
+  const days = [1, 2, 3].map((d) => ({ day: d, weekday: d - 1, isWeekend: false, isHoliday: false }));
+
+  it('grille complète → []', async () => {
+    const { missingGardeDays } = await import('./grid-checks');
+    const grid = {
+      A: { 1: 'G1', 2: 'U+G1', 3: 'BM' },
+      B: { 1: 'G2', 2: 'ACU+G2', 3: 'G1' },
+      C: { 1: 'CS1', 2: 'CS1', 3: 'G2' },
+    };
+    expect(missingGardeDays(days, grid)).toEqual([]);
+  });
+
+  it('jour sans G1, jour sans G2, jour à 2 G1 → listés', async () => {
+    const { missingGardeDays } = await import('./grid-checks');
+    const grid = {
+      A: { 1: 'G2', 2: 'G1', 3: 'G1' }, // jour 1 : pas de G1 ; jour 3 : 2 G1, pas de G2
+      B: { 1: 'BM', 2: 'CS1', 3: 'G1' },
+      C: { 1: 'CS1', 2: 'CS2', 3: 'RS' }, // jour 2 : pas de G2
+    };
+    expect(missingGardeDays(days, grid)).toEqual([1, 2, 3]);
+  });
+});

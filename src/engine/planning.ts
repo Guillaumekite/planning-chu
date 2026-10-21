@@ -101,6 +101,10 @@ export interface PlanningInput {
    * avertissement est émis dans `warnings`.
    */
   tpPreferred?: Record<DoctorId, number[]>;
+  /** Mode d'équité du comptage des gardes (voir GardeInput) : 'carry' (défaut) ou 'solde'. */
+  equityMode?: 'carry' | 'solde';
+  /** Solde cumulé par médecin depuis l'ancrage (mode 'solde' uniquement). */
+  solde?: Record<DoctorId, number>;
 }
 
 export type PlanningResult =
@@ -377,6 +381,9 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     carryWorked: input.carryWorked,
     // "Jamais G1" doctors (Dzierzek) + acupuncture doctors are ALWAYS G2 — role balancer rule.
     forceG2: [...neverG1],
+    // Équité V2 (solde) : transmis tels quels — le moteur reste pur, la route calcule le solde.
+    equityMode: input.equityMode,
+    solde: input.solde,
   };
   const gardes = await solveGardes(gardeInput);
   if (gardes.status === 'infeasible') return gardes;

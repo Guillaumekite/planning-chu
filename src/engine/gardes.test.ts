@@ -502,3 +502,61 @@ describe('solveGardes — taxe hauts compteurs, ≤ 1 garde/semaine, week-ends e
     expect(adjacent).toBeLessThanOrEqual(4);
   });
 });
+
+describe('solveGardes — mode solde (équité V2)', () => {
+  it('apportionTargets : Σ cibles = places, cibles ∈ {floor, ceil} de la part', async () => {
+    const { apportionTargets } = await import('./gardes');
+    const docs = doctors(18);
+    const weight = Object.fromEntries(docs.map((d) => [d, 1]));
+    const t = apportionTargets(docs, 62, weight, {});
+    const sum = docs.reduce((s, d) => s + t[d], 0);
+    expect(sum).toBe(62);
+    for (const d of docs) expect([3, 4]).toContain(t[d]); // part 62/18 = 3,44
+  });
+
+  it('apportionTargets : le solde négatif prend les +1, le positif les évite', async () => {
+    const { apportionTargets } = await import('./gardes');
+    const docs = doctors(18);
+    const weight = Object.fromEntries(docs.map((d) => [d, 1]));
+    const t = apportionTargets(docs, 62, weight, { D01: -2, D02: 2 });
+    expect(t.D01).toBe(4); // en retard → cible haute
+    expect(t.D02).toBe(3); // en avance → cible basse
+  });
+
+  it('apportionTargets : poids nul → cible 0 ; nom inconnu au solde ignoré ; déterministe', async () => {
+    const { apportionTargets } = await import('./gardes');
+    const docs = doctors(10);
+    const weight = Object.fromEntries(docs.map((d) => [d, d === 'D10' ? 0 : 1]));
+    const t1 = apportionTargets(docs, 60, weight, { INCONNU: -5 });
+    const t2 = apportionTargets(docs, 60, weight, { INCONNU: -5 });
+    expect(t1.D10).toBe(0); // aucun jour gardable → rien, même si des +1 circulent
+    expect(t1).toEqual(t2);
+    expect(docs.reduce((s, d) => s + t1[d], 0)).toBe(60);
+  });
+
+  it('mode solde : mois sans contrainte → écart mensuel ≤ 1', async () => {
+    const res = await solveGardes({ year: 2026, month: 12, doctors: doctors(18), equityMode: 'solde' });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const counts = Object.values(res.equity.count);
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+    expect(counts.reduce((s, v) => s + v, 0)).toBe(2 * daysInMonth(2026, 12));
+  });
+
+  it('mode solde : un médecin en retard (solde −2) finit au-dessus d’un en avance (+2)', async () => {
+    const res = await solveGardes({
+      year: 2026, month: 12, doctors: doctors(18),
+      equityMode: 'solde', solde: { D05: -2, D06: 2 },
+    });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    expect(res.equity.count.D05).toBeGreaterThan(res.equity.count.D06);
+  });
+
+  it('mode solde sans solde fourni ≡ soldes nuls (pas de crash)', async () => {
+    const a = await solveGardes({ year: 2026, month: 11, doctors: doctors(14), equityMode: 'solde' });
+    const b = await solveGardes({ year: 2026, month: 11, doctors: doctors(14), equityMode: 'solde', solde: {} });
+    expect(a.status).toBe('feasible');
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});

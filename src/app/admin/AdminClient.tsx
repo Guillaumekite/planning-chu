@@ -7,7 +7,8 @@ import { MONTHS_FR } from '@/lib/store';
 import PlanningGrid, { type GridDay } from '@/components/PlanningGrid';
 import PostCounterTable from '@/components/PostCounterTable';
 import CellEditor from '@/components/CellEditor';
-import { checkGrid, recomputeEquity, type Grid, type GridEquity } from '@/lib/grid-checks';
+import { checkGrid, recomputeEquity, missingGardeDays, type Grid, type GridEquity } from '@/lib/grid-checks';
+import { gardeCounts, monthDues } from '@/lib/solde';
 import { weekdayOf, daysInMonth } from '@/engine/calendar';
 
 type Doctor = {
@@ -19,9 +20,11 @@ type Doctor = {
 type ApiDay = { day: number; weekday: number; isWeekend: boolean; isHoliday: boolean };
 type Equity = { count: Record<string, number>; weekendCount: Record<string, number>; heavyCount: Record<string, number>; spread: number };
 type GenResult =
-  | { status: 'feasible'; days: ApiDay[]; grid: Record<string, Record<number, string>>; gardeEquity: Equity; warnings?: string[] }
+  | { status: 'feasible'; days: ApiDay[]; grid: Record<string, Record<number, string>>; gardeEquity: Equity; warnings?: string[]; solde?: Record<string, number> }
   | { status: 'infeasible'; day: number; reason: string; eligible: string[] }
   | { error: string };
+// Solde d'entrée du mois + fraction gardable (équité V2) — admin seulement, jamais publié.
+type SoldeInfo = { solde: Record<string, number>; noGardeFraction: Record<string, number> };
 // A published planning as returned by GET /api/plannings (snake_case column names).
 type PublishedPlanning = { days: ApiDay[]; grid: Record<string, Record<number, string>>; garde_equity: Equity | null };
 // Édition manuelle en cours (brouillon généré OU planning déjà publié).
@@ -81,6 +84,15 @@ export default function AdminClient() {
   // Publication demandée alors que des avertissements existent : le 1er clic arme la
   // confirmation (« passer outre »), le 2e publie. Désarmée à chaque changement.
   const [confirmPublish, setConfirmPublish] = useState(false);
+  // Garde-fou : jours sans 1 G1 + 1 G2 détectés à la publication — bandeau rouge dédié,
+  // contournable uniquement par le bouton explicite (force). Désarmé à chaque changement.
+  const [publishHoles, setPublishHoles] = useState<number[] | null>(null);
+  // Équité V2 (solde) : interrupteur global + solde d'entrée du mois affiché (admin seulement).
+  const [equityV2, setEquityV2] = useState<boolean | null>(null);
+  // Solde reçu, étiqueté par son mois : un changement de mois invalide la donnée SANS reset
+  // synchrone dans l'effet (la valeur affichée est dérivée au rendu).
+  const [soldeFetched, setSoldeFetched] = useState<{ key: string; data: SoldeInfo } | null>(null);
+  const soldeInfo = equityV2 === true && soldeFetched?.key === `${year}-${month}` ? soldeFetched.data : null;
 
   const loadDoctors = useCallback(async () => {
     const res = await fetch('/api/doctors');
@@ -98,6 +110,34 @@ export default function AdminClient() {
   useEffect(() => { loadDoctors(); }, [loadDoctors]);
   useEffect(() => { loadRoster(); }, [loadRoster]);
   useEffect(() => { loadPublished(); }, [loadPublished]);
+  useEffect(() => {
+    fetch('/api/config').then(async (r) => { if (r.ok) setEquityV2((await r.json()).equityV2); });
+  }, []);
+  useEffect(() => {
+    if (equityV2 !== true) return;
+    const key = `${year}-${month}`;
+    fetch(`/api/solde?year=${year}&month=${month}`).then(async (r) => {
+      if (r.ok) setSoldeFetched({ key, data: (await r.json()) as SoldeInfo });
+    });
+  }, [year, month, equityV2]);
+
+  async function toggleEquityV2(on: boolean) {
+    setEquityV2(on); // optimiste — l'interrupteur est le mécanisme de retour arrière prod
+    await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ equityV2: on }) });
+  }
+
+  // « Solde après ce mois » par médecin pour une grille affichée : solde d'entrée + faites − dues.
+  // Recalculé en direct pendant l'édition (les modifications manuelles comptent immédiatement).
+  function soldeAfter(grid: Grid): Record<string, number> | undefined {
+    if (equityV2 !== true || !soldeInfo) return undefined;
+    const done = gardeCounts(grid);
+    const dues = monthDues(grid, soldeInfo.noGardeFraction);
+    const out: Record<string, number> = {};
+    for (const doc of Object.keys(grid)) {
+      out[doc] = (soldeInfo.solde[doc] ?? 0) + (done[doc] ?? 0) - (dues[doc] ?? 0);
+    }
+    return out;
+  }
 
   const published = !!publishedPlanning;
   // A freshly generated (not yet published) draft for the current month, if any.
@@ -110,7 +150,7 @@ export default function AdminClient() {
     if (m < 1) { m = 12; y -= 1; } else if (m > 12) { m = 1; y += 1; }
     setMonth(m); setYear(y);
     setResult(null); setPublishMsg('');
-    setEdit(null); setSelCell(null); setConfirmPublish(false);
+    setEdit(null); setSelCell(null); setConfirmPublish(false); setPublishHoles(null);
   }
 
   async function addDoctor() {
@@ -229,10 +269,10 @@ export default function AdminClient() {
         doctors: publishedDoctors(publishedPlanning),
       });
     } else return;
-    setSelCell(null); setConfirmPublish(false); setPublishMsg('');
+    setSelCell(null); setConfirmPublish(false); setPublishMsg(''); setPublishHoles(null);
   }
   function cancelEdit() {
-    setEdit(null); setSelCell(null); setConfirmPublish(false);
+    setEdit(null); setSelCell(null); setConfirmPublish(false); setPublishHoles(null);
   }
   function setCell(doc: string, day: number, raw: string) {
     setEdit((prev) => {
@@ -242,22 +282,35 @@ export default function AdminClient() {
       else if (grid[doc]) delete grid[doc][day];
       return { ...prev, grid };
     });
-    setConfirmPublish(false);
+    setConfirmPublish(false); setPublishHoles(null);
   }
 
   // Publie une grille (brouillon tel quel, ou grille éditée). S'il reste des avertissements,
   // le 1er clic arme la confirmation « passer outre » et le 2e clic publie vraiment.
-  async function publishGrid(grid: Grid, days: ApiDay[], gardeEquity: unknown, warnings: string[]) {
-    if (warnings.length > 0 && !confirmPublish) { setConfirmPublish(true); return; }
+  // Garde-fou (toujours actif) : un jour sans 1 G1 + 1 G2 bloque la publication — seul le
+  // bouton rouge dédié du bandeau (force) passe outre, et le serveur revérifie de son côté.
+  async function publishGrid(grid: Grid, days: ApiDay[], gardeEquity: unknown, warnings: string[], force = false) {
+    if (!force) {
+      const holes = missingGardeDays(days, grid);
+      if (holes.length > 0) { setPublishHoles(holes); return; }
+      if (warnings.length > 0 && !confirmPublish) { setConfirmPublish(true); return; }
+    }
     setPublishMsg('');
     const res = await fetch('/api/plannings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ year, month, grid, days, gardeEquity }),
+      body: JSON.stringify({ year, month, grid, days, gardeEquity, force }),
     });
-    setPublishMsg(res.ok ? '✓ Planning publié — consultable via le code d\'accès.' : 'Échec de la publication.');
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (data.code === 'jours-sans-garde') { setPublishHoles(data.days as number[]); return; }
+      setPublishMsg('Échec de la publication.');
+      return;
+    }
+    setPublishMsg('✓ Planning publié — consultable via le code d\'accès.');
     // Reload from DB and drop the draft so the persistent published view (filled grid + export) takes over.
-    if (res.ok) { await loadPublished(); setResult(null); setEdit(null); setSelCell(null); setConfirmPublish(false); }
+    await loadPublished(); setResult(null); setEdit(null); setSelCell(null); setConfirmPublish(false); setPublishHoles(null);
   }
+
 
   return (
     <main className="mx-auto max-w-[1400px] p-6 font-sans text-gray-900">
@@ -365,6 +418,17 @@ export default function AdminClient() {
           <label className="ml-2 flex items-center gap-1.5 text-sm">
             <input type="checkbox" checked={acuOn} onChange={(e) => setAcuOn(e.target.checked)} /> Acupuncture
           </label>
+          <label
+            className="ml-2 flex items-center gap-1.5 text-sm"
+            title="Équité V2 : mois plats (écart ≤ 1 à présence égale), solde cumulé depuis septembre 2026. Décocher = retour à l'ancien algorithme (rattrapage sur le seul mois précédent) dès la prochaine génération."
+          >
+            <input
+              type="checkbox"
+              checked={equityV2 ?? true}
+              disabled={equityV2 === null}
+              onChange={(e) => toggleEquityV2(e.target.checked)}
+            /> Équité V2 (solde depuis sept. 2026)
+          </label>
           <button onClick={generate} disabled={loading} className="rounded bg-green-600 px-5 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
             {loading ? 'Calcul…' : 'Générer le planning'}
           </button>
@@ -413,6 +477,7 @@ export default function AdminClient() {
               </span>
               {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
             </div>
+            <HolesBanner holes={publishHoles} onForce={() => publishGrid(edit.grid, edit.days, editEquity, editWarnings, true)} onCancel={() => setPublishHoles(null)} />
             {editWarnings.length > 0 && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                 <p className="font-semibold">⚠️ Avertissements ({editWarnings.length}) — publication possible après confirmation</p>
@@ -435,7 +500,7 @@ export default function AdminClient() {
               onCellClick={(doc, day) => setSelCell({ doc, day })}
             />
             <PostCounterTable days={edit.days} grid={edit.grid} />
-            <EquityTable equity={editEquity} doctors={edit.doctors} />
+            <EquityTable equity={editEquity} doctors={edit.doctors} solde={soldeAfter(edit.grid)} />
           </div>
         ) : draft ? (
           <div className="space-y-6">
@@ -455,6 +520,7 @@ export default function AdminClient() {
               {publishMsg && <span className="text-sm text-green-700">{publishMsg}</span>}
               <span className="text-sm text-gray-500">Brouillon généré, non encore publié.</span>
             </div>
+            <HolesBanner holes={publishHoles} onForce={() => publishGrid(draft.grid, draft.days, draft.gardeEquity, draft.warnings ?? [], true)} onCancel={() => setPublishHoles(null)} />
             {draft.warnings && draft.warnings.length > 0 && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                 <p className="font-semibold">⚠️ À vérifier avant de publier ({draft.warnings.length})</p>
@@ -465,7 +531,7 @@ export default function AdminClient() {
             )}
             <PlanningGrid days={draft.days} grid={draft.grid} doctors={active.map((d) => d.name)} />
             <PostCounterTable days={draft.days} grid={draft.grid} />
-            <EquityTable equity={draft.gardeEquity} doctors={active.map((d) => d.name)} />
+            <EquityTable equity={draft.gardeEquity} doctors={active.map((d) => d.name)} solde={soldeAfter(draft.grid)} />
           </div>
         ) : publishedPlanning ? (
           <div className="space-y-6">
@@ -475,7 +541,7 @@ export default function AdminClient() {
             </div>
             <PlanningGrid days={publishedPlanning.days} grid={publishedPlanning.grid} doctors={publishedDoctors(publishedPlanning)} />
             <PostCounterTable days={publishedPlanning.days} grid={publishedPlanning.grid} />
-            {publishedPlanning.garde_equity && <EquityTable equity={publishedPlanning.garde_equity} doctors={publishedDoctors(publishedPlanning)} />}
+            {publishedPlanning.garde_equity && <EquityTable equity={publishedPlanning.garde_equity} doctors={publishedDoctors(publishedPlanning)} solde={soldeAfter(publishedPlanning.grid)} />}
           </div>
         ) : (
           <div>
@@ -493,19 +559,33 @@ function publishedDoctors(p: PublishedPlanning): string[] {
   return Object.keys(p.grid).sort((a, b) => a.localeCompare(b, 'fr'));
 }
 
-function EquityTable({ equity, doctors }: { equity: Equity; doctors: string[] }) {
+// Solde formaté à la française, signe explicite : +2,3 (en avance) / −1,0 (en retard).
+function fmtSolde(v: number): string {
+  const s = Math.abs(v).toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  return v >= 0.05 ? `+${s}` : v <= -0.05 ? `−${s}` : '0,0';
+}
+
+function EquityTable({ equity, doctors, solde }: { equity: Equity; doctors: string[]; solde?: Record<string, number> }) {
   return (
     <div>
       <h3 className="mb-2 text-lg font-semibold">Équité des gardes (écart : {equity.spread})</h3>
       <table className="text-sm">
-        <thead><tr className="border-b border-gray-300 text-left text-gray-500"><th className="py-1 pr-6">Médecin</th><th className="pr-6">Gardes</th><th className="pr-6">Week-ends</th><th>Jours pénibles</th></tr></thead>
+        <thead><tr className="border-b border-gray-300 text-left text-gray-500">
+          <th className="py-1 pr-6">Médecin</th><th className="pr-6">Gardes</th><th className="pr-6">Week-ends</th><th className="pr-6">Jours pénibles</th>
+          {solde && <th title="Solde cumulé depuis septembre 2026, ce mois inclus : positif = en avance (fera moins ensuite), négatif = en retard (prioritaire pour la garde supplémentaire). Visible par l'admin uniquement, jamais publié.">Solde après ce mois</th>}
+        </tr></thead>
         <tbody>
           {doctors.map((doc) => (
             <tr key={doc} className="border-b border-gray-100">
               <td className="py-1 pr-6 font-medium">{doc}</td>
               <td className="pr-6">{equity.count[doc] ?? 0}</td>
               <td className="pr-6">{equity.weekendCount[doc] ?? 0}</td>
-              <td>{equity.heavyCount[doc] ?? 0}</td>
+              <td className="pr-6">{equity.heavyCount[doc] ?? 0}</td>
+              {solde && (
+                <td className={(solde[doc] ?? 0) <= -1 ? 'text-red-700' : (solde[doc] ?? 0) >= 1 ? 'text-green-700' : ''}>
+                  {fmtSolde(solde[doc] ?? 0)}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -516,4 +596,23 @@ function EquityTable({ equity, doctors }: { equity: Equity; doctors: string[] })
 
 function Banner({ children }: { children: React.ReactNode }) {
   return <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-red-800">⛔ {children}</div>;
+}
+
+// Bandeau rouge du garde-fou de publication : jours sans 1 G1 + 1 G2, contournement explicite.
+function HolesBanner({ holes, onForce, onCancel }: { holes: number[] | null; onForce: () => void; onCancel: () => void }) {
+  if (!holes) return null;
+  return (
+    <div className="rounded-lg border border-red-400 bg-red-50 p-3 text-sm text-red-900">
+      <p className="font-semibold">
+        ⛔ Publication bloquée : {holes.length} jour(s) sans garde complète (1 G1 + 1 G2) — jours {holes.join(', ')}.
+      </p>
+      <p className="mt-1">Complète ces jours (✎ Modifier), ou publie en connaissance de cause : les compteurs d&apos;équité du mois suivant seront faussés.</p>
+      <div className="mt-2 flex items-center gap-2">
+        <button onClick={onForce} className="rounded bg-red-600 px-4 py-1.5 font-medium text-white hover:bg-red-700">
+          Publier malgré {holes.length} jour(s) sans garde complète
+        </button>
+        <button onClick={onCancel} className="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50">non, revenir</button>
+      </div>
+    </div>
+  );
 }

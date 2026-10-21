@@ -88,6 +88,26 @@ export function checkGrid(
 }
 
 /**
+ * Jours où la grille n'a pas EXACTEMENT 1 G1 + 1 G2 (rôles purs ou combinés) — garde-fou de
+ * publication (spec 2026-10-21) : publier un jour troué fausse le planning ET le solde de
+ * gardes du mois suivant. Toujours actif, même quand l'équité V2 est désactivée.
+ */
+export function missingGardeDays(days: CounterDay[], grid: Grid): number[] {
+  const out: number[] = [];
+  for (const cd of days) {
+    let g1 = 0;
+    let g2 = 0;
+    for (const cells of Object.values(grid)) {
+      const role = gardeRole(cells[cd.day]);
+      if (role === 'G1') g1 += 1;
+      else if (role === 'G2') g2 += 1;
+    }
+    if (g1 !== 1 || g2 !== 1) out.push(cd.day);
+  }
+  return out;
+}
+
+/**
  * Recalcule l'équité des gardes depuis la grille éditée. Les compteurs du mois sont
  * recomptés ; le report des mois précédents est préservé par delta sur la base :
  * report = cumul(base) − compte(base), puis cumul' = report + compte recompté.

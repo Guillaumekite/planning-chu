@@ -4,6 +4,8 @@ import { solvePlanning } from '@/engine/planning';
 import { getLatestPublishedBefore } from '@/lib/plannings';
 import { carryGardeLastDay } from '@/lib/carryRs';
 import { workedDaysFromGrid } from '@/lib/carryWorked';
+import { getEquityV2 } from '@/lib/config';
+import { soldeBefore } from '@/lib/solde-server';
 
 // The GLPK solver is native (WASM) → this route must run on the Node.js runtime.
 export const runtime = 'nodejs';
@@ -79,6 +81,11 @@ export async function POST(req: Request) {
     // RS le 1er de ce mois + blocage garde le 1/2. Actif à partir de juillet 2026 seulement.
     const carriedRS = carryGardeLastDay(input.year, input.month, prev, input.doctors);
 
+    // Équité V2 (solde, spec 2026-10-21) : derrière le flag app_config `equity_v2` (absent =
+    // on). Flag off → appel strictement identique à l'ancien comportement (rollback).
+    const equityV2 = await getEquityV2();
+    const solde = equityV2 ? await soldeBefore(input.year, input.month) : undefined;
+
     const result = await solvePlanning({
       year: input.year,
       month: input.month,
@@ -96,8 +103,11 @@ export async function POST(req: Request) {
       // Jours travaillés du mois publié : le carry devient un ratio, borné ±1 (spec §1.3).
       carryWorked: prev ? workedDaysFromGrid(prev.grid) : undefined,
       carryGardeLastDay: carriedRS,
+      equityMode: equityV2 ? 'solde' : undefined,
+      solde,
     });
-    return NextResponse.json(result);
+    // Le solde est renvoyé À CÔTÉ du résultat (jamais dans gardeEquity → jamais stocké/publié).
+    return NextResponse.json(equityV2 ? { ...result, solde } : result);
   } catch (e) {
     return NextResponse.json({ error: `Erreur du moteur : ${(e as Error).message}` }, { status: 500 });
   }
