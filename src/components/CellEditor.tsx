@@ -12,10 +12,10 @@ const OTHER_POSTS = ['BM-BS', 'MM-MS', 'MM', 'ACU', 'CD', 'HC', 'P', 'IRM', 'RS'
 // La garde du soir ne se combine qu'avec un vrai poste de jour (pas vide, pas une
 // garde pure, pas un repos/absence) — mêmes combinaisons que le générateur (U+G1, ACU+G2…).
 const NO_EVENING = new Set(['', 'G1', 'G2', 'RS', 'CA', 'ABS']);
-// Règle du 22/10 : l'IRM ne se cumule jamais à une G1 — seule la G2 du soir est proposée.
+// Correction du 23/10 : l'IRM ne se cumule jamais à une G2 — seule la G1 du soir est proposée.
 function eveningAllowed(main: string, g: 'G1' | 'G2'): boolean {
   if (NO_EVENING.has(main)) return false;
-  if (main === 'IRM' && g === 'G1') return false;
+  if (main === 'IRM' && g === 'G2') return false;
   return true;
 }
 
@@ -65,7 +65,7 @@ export default function CellEditor({
           <span className="text-gray-600">Garde du soir :</span>
           <button onClick={() => setEvening(null)} className={`rounded border px-2 py-1 ${!evening ? 'border-blue-600 ring-2 ring-blue-300' : 'border-gray-300 hover:border-gray-500'}`}>aucune</button>
           {eveningAllowed(main, 'G1') && <button onClick={() => setEvening('G1')} className={btn('G1', evening === 'G1')}>+G1</button>}
-          <button onClick={() => setEvening('G2')} className={btn('G2', evening === 'G2')}>+G2</button>
+          {eveningAllowed(main, 'G2') && <button onClick={() => setEvening('G2')} className={btn('G2', evening === 'G2')}>+G2</button>}
         </div>
       )}
     </div>
