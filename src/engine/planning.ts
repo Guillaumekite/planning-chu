@@ -9,7 +9,7 @@
 //   BM = bloc matin (2/jour, 3 si ≥ 10 travaillants) · S = service · CS1/CS2 = consultations
 //   (les deux si ≥ 9 travaillants, un seul alterné à 8) · HC = hors clinique
 //   P = présence (profils « P », par jour) · IRM = imagerie (profils « IRM », chaque mardi sauf
-//   le dernier mardi du mois) — P se cumule à une garde (P+G1/P+G2) ; IRM seulement à une G2
+//   le dernier mardi du mois) — P se cumule à une garde (P+G1/P+G2) ; IRM seulement à une G1
 //   CA = congé · '' = repos (week-end/férié, jour off TP, ou récup)
 //   « Travaillants » = présents réels du jour (ni congé, ni TP off, ni récup, ni U) — jamais le
 //   nombre de médecins simplement cochés sur le roster.
@@ -662,16 +662,16 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
 
     // --- Poste IRM : un porteur chaque mardi SAUF le dernier mardi du mois. Réservé aux profils
     // « IRM », en rotation équitable. Ne remplace jamais un congé / RS / absence (seuls le pool et
-    // le G2 du jour sont candidats) ; si personne n'est disponible, le poste reste non pourvu
-    // avec un avertissement. Compatible garde côté G2 UNIQUEMENT (règle du 22/10 : jamais
-    // IRM+G1) : le porteur devient IRM+G2 et un remplaçant de journée MM-MS est nommé dans le
-    // cœur. L'IRM est attribué AVANT le P : le mardi, son porteur sort du pool, les deux postes
-    // tombant alors sur deux médecins distincts.
-    let irmOnG2 = false;
+    // le G1 du jour sont candidats) ; si personne n'est disponible, le poste reste non pourvu
+    // avec un avertissement. Compatible garde côté G1 UNIQUEMENT (correction du 23/10 : jamais
+    // IRM+G2) : le porteur devient IRM+G1 et un remplaçant de journée BM-BS couvre le bloc
+    // 7h30-18h. L'IRM est attribué AVANT le P : le mardi, son porteur sort du pool, les deux
+    // postes tombant alors sur deux médecins distincts.
+    let irmOnG1 = false;
     if (irmDays.has(cd.day)) {
       const poolCands = pool.filter((d) => irmDocs.has(d));
-      const gardeCands = [g.G2].filter(
-        (d): d is DoctorId => !!d && irmDocs.has(d) && grid[d][cd.day] === 'G2',
+      const gardeCands = [g.G1].filter(
+        (d): d is DoctorId => !!d && irmDocs.has(d) && grid[d][cd.day] === 'G1',
       );
       const pick = [...poolCands, ...gardeCands].sort((a, b) => {
         const ca = postCount[a]['IRM'] ?? 0, cb = postCount[b]['IRM'] ?? 0;
@@ -683,13 +683,13 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
         if (poolCands.includes(pick)) {
           assign(pick, 'IRM');
         } else {
-          grid[pick][cd.day] = 'IRM+G2';
+          grid[pick][cd.day] = 'IRM+G1';
           postCount[pick]['IRM'] = (postCount[pick]['IRM'] ?? 0) + 1;
           totalPosts[pick] += 1;
-          irmOnG2 = true;
+          irmOnG1 = true;
         }
       } else if (irmDocs.size > 0) {
-        warnings.push(`IRM non pourvu le ${cd.day} : aucun médecin habilité disponible (congé / RS / G1 ce jour-là / absence).`);
+        warnings.push(`IRM non pourvu le ${cd.day} : aucun médecin habilité disponible (congé / RS / G2 ce jour-là / absence).`);
       }
     }
 
@@ -731,8 +731,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     // Remplacements de journée (accord du 14/08) : quand le G1 est absent du service en journée
     // (U+G1, P+G1) → BM-BS couvre le bloc 7h30-18h ; quand le G2 du soir est indisponible en
     // journée (U+G2, acu de garde, P+G2) → MM-MS.
-    if (bmbsDays.has(cd.day) || pOnG1) coreFirst.push('BM-BS');
-    if (uG2Days.has(cd.day) || acuOnGarde || pOnG2 || irmOnG2) coreFirst.push('MM-MS');
+    if (bmbsDays.has(cd.day) || pOnG1 || irmOnG1) coreFirst.push('BM-BS');
+    if (uG2Days.has(cd.day) || acuOnGarde || pOnG2) coreFirst.push('MM-MS');
     coreFirst.push('S');
     // Ped IS one of the day's blocs on Mon/Wed/Thu/Fri: it replaces the 2nd BM (exactly one Ped
     // those days, none on Tuesday). The ≥10 extra below still adds a plain BM.

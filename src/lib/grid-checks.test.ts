@@ -189,17 +189,17 @@ describe('missingGardeDays — garde-fou de publication', () => {
   });
 });
 
-describe('checkGrid — IRM jamais avec G1 (règle du 22/10)', () => {
+describe('checkGrid — IRM jamais avec G2 (correction du 23/10)', () => {
   const days = [{ day: 6, weekday: 1, isWeekend: false, isHoliday: false }];
 
-  it('signale une case IRM+G1 ; IRM+G2 et IRM purs passent', async () => {
+  it('signale une case IRM+G2 ; IRM+G1 et IRM purs passent', async () => {
     const { checkGrid } = await import('./grid-checks');
     const warnings = checkGrid(days, {
-      A: { 6: 'IRM+G1' },
-      B: { 6: 'G2' },
+      A: { 6: 'IRM+G2' },
+      B: { 6: 'G1' },
     });
-    expect(warnings.some((w) => w.includes('IRM+G1') && w.includes('A'))).toBe(true);
-    const ok = checkGrid(days, { A: { 6: 'IRM+G2' }, B: { 6: 'G1' } });
-    expect(ok.some((w) => w.includes('IRM+G1'))).toBe(false);
+    expect(warnings.some((w) => w.includes('IRM+G2') && w.includes('A'))).toBe(true);
+    const ok = checkGrid(days, { A: { 6: 'IRM+G1' }, B: { 6: 'G2' } });
+    expect(ok.some((w) => w.includes('IRM+G2'))).toBe(false);
   });
 });

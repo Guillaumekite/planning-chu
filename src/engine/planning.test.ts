@@ -910,10 +910,11 @@ describe('solvePlanning — IRM (tous les mardis sauf le dernier)', () => {
     }
   });
 
-  it('IRM jamais cumulé à G1 : seul habilité de garde un mardi → IRM+G2 (+ MM-MS), ou non pourvu s\'il est G1', async () => {
+  it('IRM jamais cumulé à G2 : seul habilité de garde un mardi → IRM+G1 (+ BM-BS), ou non pourvu s\'il est G2', async () => {
     const docs = doctors(14);
-    // D01 seul habilité IRM, avec un G+ le mardi 6 (non-dernier) : s'il est G2 ce jour-là,
-    // l'IRM doit être lui (IRM+G2) ; s'il est G1, l'IRM reste NON POURVU (règle du 22/10).
+    // D01 seul habilité IRM, avec un G+ le mardi 6 (non-dernier) : s'il est G1 ce jour-là,
+    // l'IRM doit être lui (IRM+G1, BM-BS couvre le bloc) ; s'il est G2, l'IRM reste NON
+    // POURVU (correction du 23/10 — la règle du 22/10 était inversée par erreur).
     const res = await solvePlanning({
       year: 2026, month: 10, doctors: docs,
       profiles: { D01: { irm: true } },
@@ -921,17 +922,17 @@ describe('solvePlanning — IRM (tous les mardis sauf le dernier)', () => {
     });
     if (res.status !== 'feasible') throw new Error('expected feasible');
     const cell = res.grid.D01[6];
-    expect(['IRM+G2', 'G1']).toContain(cell);
+    expect(['IRM+G1', 'G2']).toContain(cell);
     const cells6 = docs.map((d) => res.grid[d][6] ?? '');
-    if (cell === 'IRM+G2') {
-      expect(cells6).toContain('MM-MS');
+    if (cell === 'IRM+G1') {
+      expect(cells6).toContain('BM-BS');
     } else {
       expect(cells6.some((c) => c.startsWith('IRM'))).toBe(false);
       expect(res.warnings.some((w) => w.includes('IRM non pourvu le 6'))).toBe(true);
     }
   });
 
-  it('aucune case IRM+G1 n\'est jamais produite (l\'IRM ne se cumule qu\'à une G2)', async () => {
+  it('aucune case IRM+G2 n\'est jamais produite (l\'IRM ne se cumule qu\'à une G1)', async () => {
     const docs = doctors(14);
     const profiles = Object.fromEntries(docs.map((d) => [d, { irm: true } as DoctorProfile]));
     for (const month of [10, 11, 12]) {
@@ -939,7 +940,7 @@ describe('solvePlanning — IRM (tous les mardis sauf le dernier)', () => {
       if (res.status !== 'feasible') throw new Error('expected feasible');
       for (const d of docs) {
         for (const cd of res.days) {
-          expect(res.grid[d][cd.day] ?? '', `${d} jour ${cd.day} (2026-${month})`).not.toBe('IRM+G1');
+          expect(res.grid[d][cd.day] ?? '', `${d} jour ${cd.day} (2026-${month})`).not.toBe('IRM+G2');
         }
       }
     }

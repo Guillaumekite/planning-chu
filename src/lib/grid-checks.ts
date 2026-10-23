@@ -69,9 +69,9 @@ export function checkGrid(
       if (r.noHC && main === 'HC') {
         warnings.push(`HC attribué à ${doc} le ${cd.day} malgré « Jamais HC ».`);
       }
-      // Règle du 22/10 : l'IRM ne se cumule jamais à une G1 (seule la G2 du soir est permise).
-      if (raw === 'IRM+G1') {
-        warnings.push(`IRM+G1 attribué à ${doc} le ${cd.day} : l'IRM ne se cumule qu'avec une garde G2.`);
+      // Correction du 23/10 : l'IRM ne se cumule jamais à une G2 (seule la G1 du soir est permise).
+      if (raw === 'IRM+G2') {
+        warnings.push(`IRM+G2 attribué à ${doc} le ${cd.day} : l'IRM ne se cumule qu'avec une garde G1.`);
       }
 
       // Repos autour des gardes : regarde le lendemain (s'il est dans le mois).
