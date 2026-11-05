@@ -68,6 +68,10 @@ export interface GardeInput {
   minTwo?: DoctorId[];
   /** Doctors that must ALWAYS be G2 (never G1) when on garde — e.g. the acupuncture doctor. */
   forceG2?: DoctorId[];
+  /** Par médecin : jours (1-based) où, s'il est de garde, il ne peut être QUE G1 (jour de P
+   * accepté : la G2 est interdite, la G1 permise → P+G1). Deux médecins « G1 seulement » ne sont
+   * jamais de garde le même jour. */
+  g1Only?: Record<DoctorId, number[]>;
   /** Mode d'équité du COMPTAGE (spec 2026-10-21). `'carry'` (défaut) = rattrapage historique
    * sur le dernier mois publié (±1, cibles arrondies). `'solde'` = cibles ENTIÈRES floor/ceil
    * de la part (écart ≤ 1 à poids égal) ; le `solde` décide qui reçoit les cibles hautes. */

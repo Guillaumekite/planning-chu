@@ -970,3 +970,109 @@ describe('solvePlanning — IRM (tous les mardis sauf le dernier)', () => {
     expect(res.warnings.some((w) => w.includes('IRM non pourvu'))).toBe(false);
   });
 });
+
+describe('solvePlanning — P acceptés (demandes de présence validées par l\'admin)', () => {
+  // Avril 2026 : mer 1, jeu 2, ven 3, sam 4, dim 5, lun 6, mar 7, mer 8, jeu 9, ven 10.
+  const P_CELLS = ['P', 'P+G1', 'P+G2'];
+
+  it('posés d\'office (même lundi/mercredi), jamais en G2, et ce médecin ne reçoit plus de P automatique', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { presence: true }, D02: { presence: true } },
+      presenceAccepted: { D01: [6, 8, 23] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    for (const day of [6, 8, 23]) {
+      expect(['P', 'P+G1', 'RS']).toContain(res.grid.D01[day]);
+    }
+    // Aucun P automatique pour D01 en dehors de ses jours acceptés.
+    for (const cd of res.days) {
+      if ([6, 8, 23].includes(cd.day)) continue;
+      expect(P_CELLS, `D01 jour ${cd.day}`).not.toContain(res.grid.D01[cd.day] ?? '');
+    }
+    // Le P automatique continue pour les autres profils P (D02).
+    const d02P = res.days.filter((cd) => P_CELLS.includes(res.grid.D02[cd.day] ?? '')).length;
+    expect(d02P).toBeGreaterThan(0);
+  });
+
+  it('pas de P automatique supplémentaire un jour qui a déjà un P accepté', async () => {
+    const docs = doctors(14);
+    // jeudi 9 et vendredi 10 sont des jours de P automatique à 14 travaillants.
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { presence: true }, D02: { presence: true } },
+      presenceAccepted: { D01: [9, 10] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    for (const day of [9, 10]) {
+      if (res.grid.D01[day] === 'RS') continue;
+      expect(docs.filter((d) => P_CELLS.includes(res.grid[d][day] ?? ''))).toEqual(['D01']);
+    }
+  });
+
+  it('P accepté + garde ce jour-là ⇒ P+G1 et un BM-BS couvre le bloc', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { presence: true } },
+      availability: { D01: { 9: 'souhait_garde' } },
+      presenceAccepted: { D01: [9] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.grid.D01[9]).toBe('P+G1');
+    expect(docs.filter((d) => res.grid[d][9] === 'BM-BS')).toHaveLength(1);
+    expect(docs.filter((d) => res.grid[d][9] === 'G2')).toHaveLength(1);
+  });
+
+  it('le repos après garde prime : garde la veille ⇒ RS le jour du P accepté (+ avertissement)', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { presence: true } },
+      availability: { D01: { 8: 'souhait_garde' } },
+      presenceAccepted: { D01: [8, 9] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.grid.D01[8]).toBe('P+G1');
+    expect(res.grid.D01[9]).toBe('RS');
+    expect(res.warnings.some((w) => w.includes('D01') && w.includes('P accepté') && w.includes('9'))).toBe(true);
+  });
+
+  it('« Jamais G1 » + P accepté : aucune garde ce jour-là (ni G1 ni G2)', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { presence: true, forceG2: true } },
+      availability: { D01: { 9: 'souhait_garde' } },
+      presenceAccepted: { D01: [9] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(res.grid.D01[9]).toBe('P');
+  });
+
+  it('ignore un P accepté un week-end ou un jour de congé', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { presence: true } },
+      availability: { D01: { 10: 'conge' } },
+      presenceAccepted: { D01: [4, 10] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(P_CELLS).not.toContain(res.grid.D01[4] ?? '');
+    expect(res.grid.D01[10]).toBe('CA');
+  });
+
+  it('un temps partiel travaille son jour de P accepté, même déclaré TP off', async () => {
+    const docs = doctors(14);
+    const res = await solvePlanning({
+      year: 2026, month: 4, doctors: docs,
+      profiles: { D01: { presence: true, fte: 0.5 } },
+      tpPreferred: { D01: [9] },
+      presenceAccepted: { D01: [9] },
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    expect(['P', 'P+G1', 'RS']).toContain(res.grid.D01[9]);
+  });
+});

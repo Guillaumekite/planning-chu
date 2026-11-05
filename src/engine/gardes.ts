@@ -333,7 +333,10 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
       console.error(`[MILP] ${doc}:`, days.filter((cd, di) => assigned[di].includes(doc)).map((cd) => cd.day));
     }
   }
-  polishEquity(days, doctors, assigned, blocked, targets, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2, input.weeklyExpected ?? {}, new Set(input.minTwo ?? []));
+  // Jours « G1 seulement » (P accepté) : clé `${day}|${doc}`.
+  const g1Only = new Set<string>();
+  for (const [doc, ds] of Object.entries(input.g1Only ?? {})) for (const d of ds) g1Only.add(`${d}|${doc}`);
+  polishEquity(days, doctors, assigned, blocked, targets, carryHeavy, carryWeekend, input.fte ?? {}, plan, forceG2, input.weeklyExpected ?? {}, new Set(input.minTwo ?? []), g1Only);
 
   // ---- Build result ----
   const count: Record<DoctorId, number> = {};
@@ -346,7 +349,12 @@ export async function solveGardes(input: GardeInput): Promise<GardeResult> {
   }
   // Role (G1/G2) assignment — INTRA-MONTH balancing so each doctor alternates roles across their
   // gardes (|G1 − G2| ≤ 1), instead of the old alphabetical tie-break that froze a doctor into one role.
-  const g1PerDay = assignRoles(assigned, forceG2);
+  // Paire contenant UN médecin « G1 seulement » ce jour-là → rôle épinglé (il est G1).
+  const pinnedG1 = days.map((cd, di) => {
+    const pins = assigned[di].filter((doc) => g1Only.has(`${cd.day}|${doc}`));
+    return pins.length === 1 ? pins[0] : undefined;
+  });
+  const g1PerDay = assignRoles(assigned, forceG2, pinnedG1);
 
   const assignments: GardeAssignment[] = [];
   days.forEach((cd, di) => {
@@ -425,7 +433,7 @@ function isGardeWeekend(cd: CalendarDay): boolean {
  *
  * `pairs[di]` holds the 2 doctors on garde on day index `di`. Returns, per day, the G1 doctor.
  */
-function assignRoles(pairs: DoctorId[][], forceG2: Set<DoctorId>): DoctorId[] {
+function assignRoles(pairs: DoctorId[][], forceG2: Set<DoctorId>, pinnedG1: (DoctorId | undefined)[] = []): DoctorId[] {
   const VIRTUAL = ' virtual';
   const nReal = pairs.length;
   type Edge = { id: number; a: DoctorId; b: DoctorId };
@@ -478,6 +486,8 @@ function assignRoles(pairs: DoctorId[][], forceG2: Set<DoctorId>): DoctorId[] {
     const other = p[0] === g1 ? p[1] : p[0];
     // Pin forced-G2 doctors to G2 (flip if they came out as G1 and their partner is not also forced).
     if (forceG2.has(g1) && !forceG2.has(other)) g1 = other;
+    // Jour « G1 seulement » (P accepté) : ce médecin est G1, quoi qu'en dise l'orientation.
+    if (pinnedG1[di] !== undefined) g1 = pinnedG1[di]!;
     return g1;
   });
 
@@ -490,7 +500,7 @@ function assignRoles(pairs: DoctorId[][], forceG2: Set<DoctorId>): DoctorId[] {
   // Each augmentation strictly lowers Σ balance² (bounded below) ⇒ it terminates. Deterministic
   // (sorted neighbours, sorted starts). In practice this reaches |G1 − G2| ≤ 1 for every doctor.
   const other = (di: number) => (pairs[di][0] === g1arr[di] ? pairs[di][1] : pairs[di][0]);
-  const swappable = (di: number) => !forceG2.has(g1arr[di]) && !forceG2.has(other(di));
+  const swappable = (di: number) => pinnedG1[di] === undefined && !forceG2.has(g1arr[di]) && !forceG2.has(other(di));
   const bal: Record<DoctorId, number> = {};
   for (const p of pairs) for (const d of p) bal[d] = 0;
   pairs.forEach((_, di) => { bal[g1arr[di]] += 1; bal[other(di)] -= 1; });
@@ -757,6 +767,17 @@ async function solveFeasibility(
       objVars.push({ name: slack, coef: slackCoef });
     });
   }
+  // Jours « G1 seulement » (P accepté) : au plus UN tel médecin de garde par jour — deux
+  // médecins qui ne peuvent être que G1 ne peuvent pas former la paire G1/G2.
+  {
+    const g1OnlyByDay: Record<number, DoctorId[]> = {};
+    for (const [doc, ds] of Object.entries(input.g1Only ?? {})) for (const d of ds) (g1OnlyByDay[d] ??= []).push(doc);
+    for (const [dStr, docsD] of Object.entries(g1OnlyByDay)) {
+      const d = Number(dStr);
+      const vars = docsD.filter((doc) => byDay.has(d) && allowed(d, doc)).map((doc) => ({ name: gv(d, doc), coef: 1 }));
+      if (vars.length >= 2) subjectTo.push({ name: `g1only_${d}`, vars, bnds: { type: glpk.GLP_UP, lb: 0, ub: 1 } });
+    }
+  }
   // Forced G+ (≤ 2 wishers that day): the doctor's garde on that day is REQUIRED.
   for (const key of plan.forced) {
     const [dStr, doc] = key.split('|');
@@ -801,7 +822,11 @@ function polishEquity(
   forceG2: Set<DoctorId>,
   weeklyExpected: Record<DoctorId, number[][]>,
   minTwo: Set<DoctorId>,
+  g1Only: Set<string> = new Set(),
 ) {
+  // Deux médecins « G1 seulement » le même jour formeraient une paire sans G2 possible.
+  const g1Clash = (x: DoctorId | undefined, y: DoctorId, day: number) =>
+    x !== undefined && g1Only.has(`${day}|${x}`) && g1Only.has(`${day}|${y}`);
   const isBlocked = (d: number, doc: DoctorId) => (blocked[doc] ?? []).includes(d);
   const dayList: Record<DoctorId, Set<number>> = {};
   // COUNT axis: MONTHLY count vs the doctor's monthly target (`targets`, which already folds in
@@ -1030,6 +1055,7 @@ function polishEquity(
           if (b === a) continue;
           if (assigned[di].includes(b)) continue;
           if (!canTake(b, cd.day)) continue;
+          if (g1Clash(assigned[di][0] === a ? assigned[di][1] : assigned[di][0], b, cd.day)) continue;
           // Fairness deltas vs each doctor's FTE-proportional target (count always; heavy/weekend on those days).
           let delta =
             W_COUNT * (sq(monthCount[a] - 1 - tgtCount[a]) + sq(monthCount[b] + 1 - tgtCount[b]) - sq(monthCount[a] - tgtCount[a]) - sq(monthCount[b] - tgtCount[b]));
@@ -1079,6 +1105,8 @@ function polishEquity(
               if (plan.forced.has(`${cdJ.day}|${b}`)) continue;
               if (assigned[di].includes(b) || assigned[dj].includes(a)) continue;
               if (!canTakeIgnoring(a, cdJ.day, cdI.day) || !canTakeIgnoring(b, cdI.day, cdJ.day)) continue;
+              if (g1Clash(assigned[di][0] === a ? assigned[di][1] : assigned[di][0], b, cdI.day)) continue;
+              if (g1Clash(assigned[dj][0] === b ? assigned[dj][1] : assigned[dj][0], a, cdJ.day)) continue;
               let delta = 0;
               const dH = (isHeavy(cdJ) ? 1 : 0) - (isHeavy(cdI) ? 1 : 0); // a perd I, gagne J
               if (dH !== 0) {

@@ -211,6 +211,12 @@ export default function AdminClient() {
       const tDays = Object.entries(perDay).filter(([, v]) => v).map(([d]) => Number(d));
       if (tDays.length) tpPreferred[name] = tDays;
     }
+    // P (présence) demandés et ACCEPTÉS par l'admin (page Présences) — en attente/refusés ignorés.
+    const presenceAccepted: Record<string, number[]> = {};
+    for (const [name, perDay] of Object.entries((availData.presence ?? {}) as Record<string, Record<string, string>>)) {
+      const pDays = Object.entries(perDay).filter(([, st]) => st === 'approved').map(([d]) => Number(d));
+      if (pDays.length) presenceAccepted[name] = pDays;
+    }
     type Profile = {
       universitaire?: boolean; universityRatio?: number; fte?: number;
       acuLundi?: boolean; acuMercredi?: boolean; douleurPoids?: number;
@@ -235,7 +241,7 @@ export default function AdminClient() {
     try {
       const res = await fetch('/api/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, month, doctors: active.map((d) => d.name), availability, profiles, univConstraints, tpPreferred, holidays: parseDays(holidays), acupuncture: acuOn }),
+        body: JSON.stringify({ year, month, doctors: active.map((d) => d.name), availability, profiles, univConstraints, tpPreferred, presenceAccepted, holidays: parseDays(holidays), acupuncture: acuOn }),
       });
       setResult((await res.json()) as GenResult);
     } catch (e) {

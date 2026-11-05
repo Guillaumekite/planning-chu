@@ -101,6 +101,15 @@ export interface PlanningInput {
    * avertissement est émis dans `warnings`.
    */
   tpPreferred?: Record<DoctorId, number[]>;
+  /**
+   * Par médecin : jours (1-based) de P (présence) DEMANDÉS par le médecin et ACCEPTÉS par l'admin.
+   * Posés d'office (lun→ven ouvrés, sans condition d'effectif) : le jour est travaillé (gagne sur
+   * un jour off TP et sur la récup), la G2 y est interdite mais la G1 permise (→ P+G1 + BM-BS).
+   * Le repos de sécurité prime : garde la veille ⇒ RS ce jour-là (avertissement). Un médecin qui
+   * a au moins un P accepté dans le mois ne reçoit plus aucun P automatique, et un jour qui a déjà
+   * un P accepté ne reçoit pas de P automatique en plus.
+   */
+  presenceAccepted?: Record<DoctorId, number[]>;
   /** Mode d'équité du comptage des gardes (voir GardeInput) : 'carry' (défaut) ou 'solde'. */
   equityMode?: 'carry' | 'solde';
   /** Solde cumulé par médecin depuis l'ancrage (mode 'solde' uniquement). */
@@ -212,6 +221,19 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const fte: Record<DoctorId, number> = {};
   for (const doc of doctors) fte[doc] = input.profiles?.[doc]?.fte ?? 1;
 
+  // P acceptés (demandes validées par l'admin) : seulement lun→ven ouvrés et jours de présence
+  // (un congé gagne). Hors de ça, la demande est ignorée sans bruit (la saisie l'interdit déjà).
+  const pAccepted: Record<DoctorId, Set<number>> = {};
+  {
+    const workdays = new Set(days.filter((cd) => !cd.isWeekend && !cd.isHoliday).map((cd) => cd.day));
+    for (const doc of doctors) {
+      pAccepted[doc] = new Set(
+        (input.presenceAccepted?.[doc] ?? []).filter((d) => workdays.has(d) && PRESENT(avail(input, doc, d))),
+      );
+    }
+  }
+  const pAcceptedDays = new Set(doctors.flatMap((doc) => [...pAccepted[doc]]));
+
   // Consultation douleur (CD) eligibility & weight per doctor: 0 = not eligible, 1 = simple, 2 = double.
   const douleurPoids: Record<DoctorId, number> = {};
   for (const doc of doctors) douleurPoids[doc] = input.profiles?.[doc]?.douleurPoids ?? 0;
@@ -236,6 +258,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       if (cd.isWeekend || cd.isHoliday || !PRESENT(avail(input, doc, cd.day))) continue;
       availWeekdays++;
       if (avail(input, doc, cd.day) === 'souhait_garde') forcedWork.add(cd.day); // G+ ⇒ travaillé
+      else if (pAccepted[doc].has(cd.day)) forcedWork.add(cd.day); // P accepté ⇒ travaillé
       else if (pref.has(cd.day)) declaredOff.push(cd.day);
     }
     const offQuota = availWeekdays - Math.round(fte[doc] * availWeekdays);
@@ -318,6 +341,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     for (const d of univDays[doc]) if (d - 1 >= 1) blocked.push(d - 1);
     // Garde le dernier jour du mois précédent → RS le 1er, 2 encore en repos : garde interdite le 1 et 2.
     if (carriedRS.has(doc)) blocked.push(1, 2);
+    // P accepté = G2 interdite ; un médecin « Jamais G1 » ne peut donc pas être de garde ce jour-là.
+    if (neverG1.has(doc)) for (const d of pAccepted[doc]) blocked.push(d);
     if (blocked.length) gardeBlocked[doc] = [...new Set(blocked)];
   }
 
@@ -332,6 +357,7 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     for (const d of univDays[doc]) if (d - 1 >= 1) nonTpBlocked.add(d - 1);
     // Les 2 jours de repos inter-mois réduisent aussi la cible de gardes (comme la veille de jour Univ).
     if (carriedRS.has(doc)) { nonTpBlocked.add(1); nonTpBlocked.add(2); }
+    if (neverG1.has(doc)) for (const d of pAccepted[doc]) nonTpBlocked.add(d);
     gardeWeight[doc] = fte[doc] * ((totalDays - nonTpBlocked.size) / totalDays);
   }
 
@@ -381,6 +407,8 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     carryWorked: input.carryWorked,
     // "Jamais G1" doctors (Dzierzek) + acupuncture doctors are ALWAYS G2 — role balancer rule.
     forceG2: [...neverG1],
+    // Jours de P accepté : s'il est de garde, ce médecin ne peut être que G1 (→ P+G1).
+    g1Only: Object.fromEntries(doctors.filter((doc) => pAccepted[doc].size).map((doc) => [doc, [...pAccepted[doc]]])),
     // Équité V2 (solde) : transmis tels quels — le moteur reste pur, la route calcule le solde.
     equityMode: input.equityMode,
     solde: input.solde,
@@ -468,6 +496,20 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
       if (cell === 'G1') { grid[doc][day] = 'U+G1'; bmbsDays.add(day); }
       else if (cell === 'G2') { grid[doc][day] = 'U+G2'; uG2Days.add(day); }
       else if (basePresent(doc, day) && !cell) grid[doc][day] = 'U';
+    }
+  }
+
+  // P acceptés (demandes validées par l'admin) : posés d'office, sans condition d'effectif, AVANT
+  // la complétion Univ, l'ACU et la récup (la case remplie les écarte). De garde ce jour-là → G1
+  // uniquement (le moteur des gardes l'impose) : 'P+G1' et un BM-BS couvre le bloc 7h30-18h.
+  // Le RS du lendemain de garde prime sur le P (avertissement).
+  for (const doc of doctors) {
+    for (const day of [...pAccepted[doc]].sort((a, b) => a - b)) {
+      const cell = grid[doc][day];
+      if (cell === 'G1') { grid[doc][day] = 'P+G1'; bmbsDays.add(day); }
+      else if (!cell && basePresent(doc, day)) grid[doc][day] = 'P';
+      else if (cell === 'RS') warnings.push(`P accepté de ${doc} le ${day} non posé : repos de sécurité (garde la veille).`);
+      else if (cell) warnings.push(`P accepté de ${doc} le ${day} non posé : case déjà occupée (${cell}).`);
     }
   }
 
@@ -585,6 +627,15 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
   const postCount: Record<DoctorId, Record<string, number>> = {};
   const totalPosts: Record<DoctorId, number> = {};
   for (const doc of doctors) { postCount[doc] = {}; totalPosts[doc] = 0; }
+  // Les P acceptés comptent dans la charge (équité des autres postes).
+  for (const doc of doctors) {
+    for (const day of pAccepted[doc]) {
+      if (grid[doc][day] === 'P' || grid[doc][day] === 'P+G1') {
+        postCount[doc]['P'] = (postCount[doc]['P'] ?? 0) + 1;
+        totalPosts[doc] += 1;
+      }
+    }
+  }
   const csWeek = new Map<number, { CS1: number; CS2: number }>();
   const csMonth = { CS1: 0, CS2: 0 };
   // Deterministic rotation for tie-breaks: the alphabetical order shifted by the day number, so
@@ -697,15 +748,19 @@ export async function solvePlanning(input: PlanningInput): Promise<PlanningResul
     // et vendredi si ≥ 11, jamais lundi ni mercredi. Réservé aux profils « P ». Compatible
     // avec une garde du soir : le porteur devient P+G1/P+G2 et un remplaçant de journée est
     // nommé dans le cœur (BM-BS pour couvrir le bloc du G1, MM-MS pour le G2).
+    // P automatique : jamais un jour qui a déjà un P accepté, et jamais pour un médecin qui a au
+    // moins un P accepté dans le mois (ses P viennent de ses demandes).
     const pDay =
-      (cd.weekday === 1 && working >= 13) ||
-      ((cd.weekday === 3 || cd.weekday === 4) && working >= 11);
+      !pAcceptedDays.has(cd.day) &&
+      ((cd.weekday === 1 && working >= 13) ||
+        ((cd.weekday === 3 || cd.weekday === 4) && working >= 11));
+    const autoP = (d: DoctorId) => presenceDocs.has(d) && pAccepted[d].size === 0;
     let pOnG1 = false;
     let pOnG2 = false;
     if (pDay) {
-      const poolCands = pool.filter((d) => presenceDocs.has(d));
+      const poolCands = pool.filter(autoP);
       const gardeCands = [g.G1, g.G2].filter(
-        (d): d is DoctorId => !!d && presenceDocs.has(d) && (grid[d][cd.day] === 'G1' || grid[d][cd.day] === 'G2'),
+        (d): d is DoctorId => !!d && autoP(d) && (grid[d][cd.day] === 'G1' || grid[d][cd.day] === 'G2'),
       );
       const pick = [...poolCands, ...gardeCands].sort((a, b) => {
         const ca = postCount[a]['P'] ?? 0, cb = postCount[b]['P'] ?? 0;

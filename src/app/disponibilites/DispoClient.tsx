@@ -7,14 +7,16 @@ import { MONTHS_FR, WEEKDAYS_FR, AVAIL_STATES, AVAIL_INFO, type Availability } f
 import { buildMonth } from '@/engine/calendar';
 import { DEFAULT_WEIGHTS } from '@/engine/types';
 
-type Doc = { id: number; name: string; universitaire: boolean; partTime: boolean };
+type Doc = { id: number; name: string; universitaire: boolean; partTime: boolean; presence: boolean };
 type Avail = Record<string, Record<number, Availability>>;
 type Conge = Record<string, Record<number, string>>;
 type CongeNote = Record<string, Record<number, string>>;
 type UnivMap = Record<string, Record<number, boolean>>;
 type TpMap = Record<string, Record<number, boolean>>;
-/** The garde-preference palette states plus the orthogonal "univ" / "tp" brushes. */
-type Brush = Availability | 'univ' | 'tp';
+/** Demandes de P : nom → (jour → statut pending | approved | refused). */
+type PresenceMap = Record<string, Record<number, string>>;
+/** The garde-preference palette states plus the orthogonal "univ" / "tp" / "presence" brushes. */
+type Brush = Availability | 'univ' | 'tp' | 'presence';
 
 export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; doctorId: number | null }) {
   const [doctors, setDoctors] = useState<Doc[]>([]);
@@ -29,13 +31,16 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   const [pendingUniv, setPendingUniv] = useState<UnivMap>({});
   const [savedTp, setSavedTp] = useState<TpMap>({});
   const [pendingTp, setPendingTp] = useState<TpMap>({});
+  const [savedP, setSavedP] = useState<PresenceMap>({});
+  const [pendingP, setPendingP] = useState<PresenceMap>({});
+  const [presenceNote, setPresenceNote] = useState<CongeNote>({});
   const [brush, setBrush] = useState<Brush>('souhait_garde');
   const [savedMsg, setSavedMsg] = useState('');
 
   useEffect(() => {
     fetch('/api/doctors').then((r) => (r.ok ? r.json() : { doctors: [] })).then((d) => {
-      const all: Doc[] = (d.doctors ?? []).map((x: { id: number; name: string; universitaire?: boolean; part_time?: boolean }) =>
-        ({ id: x.id, name: x.name, universitaire: !!x.universitaire, partTime: !!x.part_time }));
+      const all: Doc[] = (d.doctors ?? []).map((x: { id: number; name: string; universitaire?: boolean; part_time?: boolean; presence?: boolean }) =>
+        ({ id: x.id, name: x.name, universitaire: !!x.universitaire, partTime: !!x.part_time, presence: !!x.presence }));
       // Un médecin voit tout le monde (lecture seule) avec sa propre ligne en premier.
       setDoctors(isAdmin ? all : [...all.filter((x) => x.id === doctorId), ...all.filter((x) => x.id !== doctorId)]);
     });
@@ -49,6 +54,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       setCongeNote(d.congeNote ?? {});
       setSavedUniv(d.univ ?? {}); setPendingUniv(d.univ ?? {});
       setSavedTp(d.tpWork ?? {}); setPendingTp(d.tpWork ?? {});
+      setSavedP(d.presence ?? {}); setPendingP(d.presence ?? {}); setPresenceNote(d.presenceNote ?? {});
     }
   }, [year, month]);
   useEffect(() => { loadAvail(); }, [loadAvail]);
@@ -56,7 +62,8 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   const days = buildMonth(year, month, DEFAULT_WEIGHTS, []);
   const dirty = JSON.stringify(saved) !== JSON.stringify(pending)
     || JSON.stringify(savedUniv) !== JSON.stringify(pendingUniv)
-    || JSON.stringify(savedTp) !== JSON.stringify(pendingTp);
+    || JSON.stringify(savedTp) !== JSON.stringify(pendingTp)
+    || JSON.stringify(savedP) !== JSON.stringify(pendingP);
   const stateOf = (name: string, day: number): Availability => pending[name]?.[day] ?? 'dispo';
   const univOf = (name: string, day: number): boolean => !!pendingUniv[name]?.[day];
   // Un médecin ne peut modifier que sa propre ligne ; les autres sont en lecture seule.
@@ -73,6 +80,10 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   // Les légendes, elles, s'affichent dès qu'une ligne visible porte le marqueur.
   const showUnivLegend = hasUniversitaire || doctors.some((d) => d.universitaire);
   const showTpLegend = hasPartTime || doctors.some((d) => d.partTime);
+  // Pinceau P : l'admin le voit toujours ; un médecin seulement si sa fiche a le profil « P ».
+  const hasPresence = isAdmin || !!self?.presence;
+  const showPresenceLegend = hasPresence || doctors.some((d) => d.presence);
+  const presenceOf = (name: string, day: number): string | undefined => pendingP[name]?.[day];
 
   function cellLook(name: string, day: number): { label: string; cls: string } {
     const st = stateOf(name, day);
@@ -89,6 +100,16 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
     }
     // Orthogonal markers: keep the garde-preference background, add a ring. Label priority when a
     // cell has no garde label: garde > TP > U. TP = emerald ring; Univ = indigo ring.
+    // P (demande de présence) : anneau rose en attente, vert accepté, rouge (barré) refusé —
+    // prioritaire sur les autres anneaux ; le libellé ajoute « P » à la préférence de garde.
+    const pSt = st !== 'conge' ? presenceOf(name, day) : undefined;
+    if (pSt) {
+      const ring = pSt === 'approved' ? ' ring-2 ring-inset ring-green-600 font-semibold'
+        : pSt === 'refused' ? ' ring-2 ring-inset ring-red-600 line-through'
+        : ' ring-2 ring-inset ring-pink-500';
+      const bg = base.label ? base.cls : pSt === 'approved' ? 'bg-pink-100 text-pink-800' : 'bg-white text-pink-700';
+      return { label: base.label ? `${base.label}·P` : 'P', cls: `${bg}${ring}` };
+    }
     const rings = `${tp ? ' ring-2 ring-inset ring-emerald-500' : ''}${u ? ' ring-2 ring-inset ring-indigo-500' : ''}`;
     if (tp || u) {
       const fallback = tp ? 'TP' : 'U';
@@ -98,16 +119,16 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   }
 
   // Refused leave grouped into consecutive-day runs, with the admin's note, for the recap below the grid.
-  function refusedRuns(name: string): { start: number; end: number; note?: string }[] {
-    const rdays = Object.keys(conge[name] ?? {}).map(Number)
-      .filter((d) => conge[name]?.[d] === 'refused').sort((a, b) => a - b);
+  function refusedRuns(name: string, statuses: Conge = conge, notes: CongeNote = congeNote): { start: number; end: number; note?: string }[] {
+    const rdays = Object.keys(statuses[name] ?? {}).map(Number)
+      .filter((d) => statuses[name]?.[d] === 'refused').sort((a, b) => a - b);
     const runs: { start: number; end: number; note?: string }[] = [];
     for (const d of rdays) {
       const last = runs[runs.length - 1];
       if (last && d === last.end + 1) last.end = d; else runs.push({ start: d, end: d });
     }
     for (const r of runs) {
-      for (let d = r.start; d <= r.end; d++) { const n = congeNote[name]?.[d]; if (n) { r.note = n; break; } }
+      for (let d = r.start; d <= r.end; d++) { const n = notes[name]?.[d]; if (n) { r.note = n; break; } }
     }
     return runs;
   }
@@ -117,6 +138,9 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   // Le récap des refus reste personnel pour un médecin (le motif des autres n'y a pas sa place).
   const recapDoctors = isAdmin ? doctors : doctors.filter((d) => d.id === doctorId);
   const anyRefused = recapDoctors.some((d) => refusedRuns(d.name).length > 0);
+  // P refusés : on ne garde que les demandes encore posées (statut enregistré = refused).
+  const refusedP = (name: string) => refusedRuns(name, savedP, presenceNote);
+  const anyRefusedP = recapDoctors.some((d) => refusedP(d.name).length > 0);
 
   function apply(name: string, day: number) {
     const doc = doctors.find((d) => d.name === name);
@@ -132,11 +156,30 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       });
       return;
     }
+    if (brush === 'presence') {
+      // P : profils « P » seulement, lundi → vendredi, jamais sur un congé. Bascule on/off ;
+      // réactiver un P déjà enregistré retrouve son statut (pas de nouvelle demande).
+      if (!doc.presence) return;
+      const cd = days.find((x) => x.day === day);
+      if (!cd || cd.isWeekend || stateOf(name, day) === 'conge') return;
+      if (pendingTp[name]?.[day]) {
+        // P (présence) et TP (jour off souhaité) s'excluent : le P remplace le marqueur TP.
+        setPendingTp((p) => { const row = { ...(p[name] ?? {}) }; delete row[day]; return { ...p, [name]: row }; });
+      }
+      setPendingP((p) => {
+        const row = { ...(p[name] ?? {}) };
+        if (row[day]) delete row[day]; else row[day] = savedP[name]?.[day] ?? 'pending';
+        return { ...p, [name]: row };
+      });
+      return;
+    }
     if (brush === 'tp') {
       // TP (jour off souhaité) days are only meaningful for part-time doctors — ignore other rows.
       if (!doctors.find((d) => d.name === name)?.partTime) return;
       // Incompatible with G+ : wishing a garde implies working that day, so no off marker on it.
       if (stateOf(name, day) === 'souhait_garde') return;
+      // Incompatible avec une demande de P (présence = jour travaillé).
+      if (presenceOf(name, day)) return;
       setPendingTp((p) => {
         const row = { ...(p[name] ?? {}) };
         if (row[day]) delete row[day]; else row[day] = true;
@@ -151,6 +194,10 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
         delete row[day];
         return { ...p, [name]: row };
       });
+    }
+    // Un congé efface la demande de P du même jour (absent ≠ présent).
+    if (brush === 'conge' && pendingP[name]?.[day]) {
+      setPendingP((p) => { const row = { ...(p[name] ?? {}) }; delete row[day]; return { ...p, [name]: row }; });
     }
     setPending((p) => {
       const row = { ...(p[name] ?? {}) };
@@ -169,20 +216,22 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
   async function save() {
     const names = new Set([
       ...Object.keys(saved), ...Object.keys(pending), ...Object.keys(savedUniv), ...Object.keys(pendingUniv),
-      ...Object.keys(savedTp), ...Object.keys(pendingTp),
+      ...Object.keys(savedTp), ...Object.keys(pendingTp), ...Object.keys(savedP), ...Object.keys(pendingP),
     ]);
-    const changes: { name: string; day: number; state: Availability; univ: boolean; tpWork: boolean }[] = [];
+    const changes: { name: string; day: number; state: Availability; univ: boolean; tpWork: boolean; presence: boolean }[] = [];
     for (const name of names) {
       const a = saved[name] ?? {}; const b = pending[name] ?? {};
       const su = savedUniv[name] ?? {}; const pu = pendingUniv[name] ?? {};
       const st = savedTp[name] ?? {}; const pt = pendingTp[name] ?? {};
-      const dayset = new Set([...Object.keys(a), ...Object.keys(b), ...Object.keys(su), ...Object.keys(pu), ...Object.keys(st), ...Object.keys(pt)].map(Number));
+      const sp = savedP[name] ?? {}; const pp = pendingP[name] ?? {};
+      const dayset = new Set([...Object.keys(a), ...Object.keys(b), ...Object.keys(su), ...Object.keys(pu), ...Object.keys(st), ...Object.keys(pt), ...Object.keys(sp), ...Object.keys(pp)].map(Number));
       for (const day of dayset) {
         const beforeState = a[day] ?? 'dispo'; const afterState = b[day] ?? 'dispo';
         const beforeUniv = !!su[day]; const afterUniv = !!pu[day];
         const beforeTp = !!st[day]; const afterTp = !!pt[day];
-        if (beforeState !== afterState || beforeUniv !== afterUniv || beforeTp !== afterTp) {
-          changes.push({ name, day, state: afterState, univ: afterUniv, tpWork: afterTp });
+        const beforeP = !!sp[day]; const afterP = !!pp[day];
+        if (beforeState !== afterState || beforeUniv !== afterUniv || beforeTp !== afterTp || beforeP !== afterP) {
+          changes.push({ name, day, state: afterState, univ: afterUniv, tpWork: afterTp, presence: afterP });
         }
       }
     }
@@ -190,7 +239,7 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
       const id = doctors.find((d) => d.name === c.name)?.id;
       await fetch('/api/availability', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year, month, day: c.day, state: c.state, univ: c.univ, tpWork: c.tpWork, doctorId: isAdmin ? id : undefined }),
+        body: JSON.stringify({ year, month, day: c.day, state: c.state, univ: c.univ, tpWork: c.tpWork, presence: c.presence, doctorId: isAdmin ? id : undefined }),
       });
     }
     await loadAvail();
@@ -248,6 +297,12 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
             TP — Jour non travaillé souhaité (temps partiel)
           </button>
         )}
+        {hasPresence && (
+          <button onClick={() => setBrush('presence')}
+            className={`rounded px-3 py-1.5 text-sm text-pink-700 ${brush === 'presence' ? 'bg-pink-100 ring-2 ring-blue-500' : 'bg-white ring-2 ring-inset ring-pink-400'}`}>
+            P — Demande de présence (lun→ven, se combine avec G+/G−)
+          </button>
+        )}
       </div>
 
       {/* Tout est ancré à GAUCHE avec des largeurs fixes : rien ne se déplace selon la longueur
@@ -292,7 +347,11 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
                       const c = cellLook(doc.name, d.day);
                       const refused = conge[doc.name]?.[d.day] === 'refused';
                       const note = refused ? congeNote[doc.name]?.[d.day] : undefined;
-                      const title = refused ? (note ? `Congé refusé — motif : ${note}` : 'Congé refusé') : undefined;
+                      const pSt = presenceOf(doc.name, d.day);
+                      const pNote = presenceNote[doc.name]?.[d.day];
+                      const title = refused ? (note ? `Congé refusé — motif : ${note}` : 'Congé refusé')
+                        : pSt === 'refused' ? (pNote ? `P refusé — motif : ${pNote}` : 'P refusé')
+                        : pSt === 'approved' ? 'P accepté' : pSt ? 'P en attente de validation' : undefined;
                       return <td key={d.day} title={title} onClick={editable ? () => apply(doc.name, d.day) : undefined} className={`h-9 w-9 min-w-9 border border-gray-100 p-0 text-xs ${editable ? 'cursor-pointer' : 'cursor-default'} ${d.isWeekend ? 'ring-1 ring-amber-100' : ''} ${c.cls}`}>{c.label || ' '}</td>;
                     })}
                   </tr>
@@ -322,6 +381,29 @@ export default function DispoClient({ isAdmin, doctorId }: { isAdmin: boolean; d
             )))}
           </ul>
         </div>
+      )}
+      {anyRefusedP && (
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3">
+          <p className="mb-1 text-sm font-semibold text-red-800">P refusés — {MONTHS_FR[month - 1]} {year}</p>
+          <ul className="space-y-1 text-sm text-red-700">
+            {recapDoctors.flatMap((doc) => refusedP(doc.name).map((r, i) => (
+              <li key={`p-${doc.id}-${i}`}>
+                {isAdmin && <span className="font-medium">{doc.name} — </span>}
+                <span>{fmtRange(r)}</span>
+                {r.note ? <span> — <span className="font-medium">motif :</span> {r.note}</span> : <span className="text-red-500"> — sans motif</span>}
+              </li>
+            )))}
+          </ul>
+        </div>
+      )}
+      {showPresenceLegend && (
+        <p className="mt-1 text-sm text-gray-500">
+          <span className="rounded px-1 text-pink-700 ring-2 ring-inset ring-pink-500">P</span> Demande de présence
+          (profils « P », lundi → vendredi) : <span className="rounded px-1 ring-2 ring-inset ring-pink-500">en attente</span> →
+          <span className="ml-1 rounded bg-pink-100 px-1 ring-2 ring-inset ring-green-600">acceptée</span> ou
+          <span className="ml-1 rounded px-1 line-through ring-2 ring-inset ring-red-600">refusée</span> par l&apos;admin.
+          Un P accepté est posé d&apos;office : il se cumule avec une G1 mais interdit la G2 ce jour-là.
+        </p>
       )}
       {showUnivLegend && (
         <p className="mt-1 text-sm text-gray-500">

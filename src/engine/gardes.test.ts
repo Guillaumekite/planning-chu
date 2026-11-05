@@ -256,6 +256,56 @@ describe('solveGardes — G1/G2 role balancing (intra-month)', () => {
   });
 });
 
+describe('solveGardes — jours « G1 seulement » (P accepté : G2 interdite, G1 permise)', () => {
+  const allDays = (y: number, m: number) => Array.from({ length: daysInMonth(y, m) }, (_, i) => i + 1);
+
+  it('un médecin G1-seulement tous les jours n\'est JAMAIS G2 (et garde bien des gardes)', async () => {
+    const docs = doctors(14);
+    const res = await solveGardes({ year: 2026, month: 4, doctors: docs, g1Only: { D01: allDays(2026, 4) } });
+    expect(res.status).toBe('feasible');
+    if (res.status !== 'feasible') return;
+    const d01 = res.assignments.filter((a) => a.doctorId === 'D01');
+    expect(d01.length).toBeGreaterThan(0);
+    expect(d01.every((a) => a.role === 'G1')).toBe(true);
+  });
+
+  it('un G+ posé un jour G1-seulement est honoré en G1', async () => {
+    const docs = doctors(14);
+    const res = await solveGardes({
+      year: 2026, month: 4, doctors: docs,
+      wishes: { D01: [7], D02: [7] }, g1Only: { D01: [7] }, forceG2: ['D03'],
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const d7 = res.assignments.filter((a) => a.day === 7);
+    expect(d7.find((a) => a.doctorId === 'D01')?.role).toBe('G1');
+    expect(d7.find((a) => a.doctorId === 'D02')?.role).toBe('G2');
+  });
+
+  it('deux médecins G1-seulement ne sont jamais de garde le même jour', async () => {
+    const docs = doctors(14);
+    const all = allDays(2026, 4);
+    const res = await solveGardes({ year: 2026, month: 4, doctors: docs, g1Only: { D01: all, D02: all } });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    for (const day of all) {
+      const today = res.assignments.filter((a) => a.day === day).map((a) => a.doctorId);
+      expect(today.includes('D01') && today.includes('D02'), `jour ${day}`).toBe(false);
+    }
+    for (const a of res.assignments) if (a.doctorId === 'D01' || a.doctorId === 'D02') expect(a.role).toBe('G1');
+  });
+
+  it('G1-seulement + forceG2 le même jour : le forceG2 reste G2, le G1-seulement prend G1', async () => {
+    const docs = doctors(14);
+    const res = await solveGardes({
+      year: 2026, month: 4, doctors: docs,
+      wishes: { D01: [9], D02: [9] }, g1Only: { D01: [9] }, forceG2: ['D02'],
+    });
+    if (res.status !== 'feasible') throw new Error('expected feasible');
+    const d9 = res.assignments.filter((a) => a.day === 9);
+    expect(d9.find((a) => a.doctorId === 'D01')?.role).toBe('G1');
+    expect(d9.find((a) => a.doctorId === 'D02')?.role).toBe('G2');
+  });
+});
+
 describe('solveGardes — determinism', () => {
   it('produces identical output for identical input', async () => {
     const input: GardeInput = {
