@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSession } from '@/lib/auth';
 import { getAvailability, setCell } from '@/lib/availability';
+import { queryOne } from '@/db/client';
 
 export const runtime = 'nodejs';
 
@@ -23,6 +24,7 @@ const PutBody = z.object({
   state: z.enum(['dispo', 'souhait_garde', 'no_garde', 'conge']),
   univ: z.boolean().optional(),
   tpWork: z.boolean().optional(),
+  presence: z.boolean().optional(), // demande de présence (P) — profils « P » seulement
   doctorId: z.number().int().optional(),
 });
 
@@ -36,6 +38,13 @@ export async function PUT(req: Request) {
   const doctorId = s.role === 'admin' ? parsed.data.doctorId : s.doctorId ?? undefined;
   if (doctorId == null) return NextResponse.json({ error: 'Médecin non identifié' }, { status: 400 });
 
-  await setCell(doctorId, parsed.data.year, parsed.data.month, parsed.data.day, parsed.data.state, parsed.data.univ ?? false, parsed.data.tpWork ?? false);
+  // Le pinceau P n'existe que pour les médecins au profil « P » : un médecin sans ce profil ne
+  // peut pas poser de demande (l'admin, lui, peut en poser pour n'importe qui).
+  let presence = parsed.data.presence ?? false;
+  if (presence && s.role !== 'admin') {
+    const doc = await queryOne<{ presence: boolean }>(`SELECT presence FROM doctors WHERE id = $1`, [doctorId]);
+    presence = !!doc?.presence;
+  }
+  await setCell(doctorId, parsed.data.year, parsed.data.month, parsed.data.day, parsed.data.state, parsed.data.univ ?? false, parsed.data.tpWork ?? false, presence);
   return NextResponse.json({ ok: true });
 }

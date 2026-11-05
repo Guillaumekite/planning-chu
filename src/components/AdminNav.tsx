@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 
-type AdminPage = 'planning' | 'conges' | 'disponibilites';
+type AdminPage = 'planning' | 'conges' | 'presences' | 'disponibilites';
 
 const TABS: { key: AdminPage; label: string; href: string }[] = [
   { key: 'planning', label: 'Planning des gardes', href: '/admin' },
   { key: 'conges', label: 'Congés', href: '/admin/conges' },
+  { key: 'presences', label: 'Présences', href: '/admin/presences' },
   { key: 'disponibilites', label: 'Disponibilités', href: '/disponibilites' },
 ];
 

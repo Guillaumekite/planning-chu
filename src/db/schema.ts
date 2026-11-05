@@ -67,6 +67,12 @@ ALTER TABLE availability ADD COLUMN IF NOT EXISTS conge_note text;
 -- comme univ). Le moteur force ce jour en travaillé et complète le quota automatiquement.
 ALTER TABLE availability ADD COLUMN IF NOT EXISTS tp_work boolean NOT NULL DEFAULT false;
 
+-- "P" : demande de présence (médecins au profil « P »), marqueur orthogonal à state comme univ.
+-- Statut de validation admin (pending | approved | refused) + motif de refus éventuel.
+ALTER TABLE availability ADD COLUMN IF NOT EXISTS presence_req boolean NOT NULL DEFAULT false;
+ALTER TABLE availability ADD COLUMN IF NOT EXISTS presence_status text;
+ALTER TABLE availability ADD COLUMN IF NOT EXISTS presence_note text;
+
 -- Which doctors work a given month (the admin's per-month roster).
 CREATE TABLE IF NOT EXISTS rosters (
   year      integer NOT NULL,

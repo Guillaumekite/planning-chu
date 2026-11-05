@@ -38,6 +38,8 @@ const BodySchema = z.object({
   wishes: z.record(z.string(), z.array(z.number().int().min(1).max(31))).optional(),
   univConstraints: z.record(z.string(), z.array(z.number().int().min(1).max(31))).optional(),
   tpPreferred: z.record(z.string(), z.array(z.number().int().min(1).max(31))).optional(),
+  // P (présence) demandés par le médecin et ACCEPTÉS par l'admin — posés d'office.
+  presenceAccepted: z.record(z.string(), z.array(z.number().int().min(1).max(31))).optional(),
 });
 
 export async function POST(req: Request) {
@@ -97,6 +99,7 @@ export async function POST(req: Request) {
       acupuncture: input.acupuncture,
       univConstraints: input.univConstraints,
       tpPreferred: input.tpPreferred,
+      presenceAccepted: input.presenceAccepted,
       carryCount: prevEq.count,
       carryHeavy: prevEq.heavyCount,
       carryWeekend: prevEq.weekendCount,

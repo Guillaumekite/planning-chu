@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import bcrypt from 'bcryptjs';
 import { query, queryOne } from './client';
 import { ensureSchema } from './schema';
-import { setCell } from '@/lib/availability';
+import { setCell, setPresenceStatus, getAvailability } from '@/lib/availability';
 import { setAccount, deleteDoctor } from '@/lib/doctors';
 
 // Uses the embedded PGlite database (no external Postgres needed).
@@ -79,6 +79,40 @@ describe('database layer (PGlite)', () => {
       [doc!.id],
     );
     expect(av).toEqual({ state: 'souhait_garde', tp_work: false });
+  });
+
+  it('setCell P : demande en attente, statut conservé quand on change G+/G−, effacé quand on retire le P', async () => {
+    const doc = await queryOne<{ id: number }>(`SELECT id FROM doctors WHERE name = 'FABRE'`);
+    const id = doc!.id;
+    // jeudi 15 octobre 2026
+    await setCell(id, 2026, 10, 15, 'dispo', false, false, true);
+    let row = await queryOne<{ presence_req: boolean; presence_status: string | null }>(
+      `SELECT presence_req, presence_status FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 10 AND day = 15`, [id]);
+    expect(row).toEqual({ presence_req: true, presence_status: 'pending' });
+
+    await setPresenceStatus(id, [{ year: 2026, month: 10, day: 15 }], 'approved');
+    await setCell(id, 2026, 10, 15, 'souhait_garde', false, false, true); // P + G+ : statut gardé
+    row = await queryOne(`SELECT presence_req, presence_status FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 10 AND day = 15`, [id]);
+    expect(row).toEqual({ presence_req: true, presence_status: 'approved' });
+    const av = await getAvailability(2026, 10);
+    expect(av.presence.FABRE?.[15]).toBe('approved');
+
+    await setCell(id, 2026, 10, 15, 'souhait_garde', false, false, false); // P retiré
+    row = await queryOne(`SELECT presence_req, presence_status FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 10 AND day = 15`, [id]);
+    expect(row).toEqual({ presence_req: false, presence_status: null });
+  });
+
+  it('setCell P : refusé un week-end ou un jour de congé, et exclusif du marqueur TP off', async () => {
+    const doc = await queryOne<{ id: number }>(`SELECT id FROM doctors WHERE name = 'FABRE'`);
+    const id = doc!.id;
+    await setCell(id, 2026, 10, 17, 'dispo', false, false, true); // samedi 17 → rien à stocker
+    expect(await queryOne(`SELECT 1 FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 10 AND day = 17`, [id])).toBeNull();
+    await setCell(id, 2026, 10, 16, 'conge', false, false, true); // congé : pas de P
+    let row = await queryOne(`SELECT presence_req FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 10 AND day = 16`, [id]);
+    expect(row).toEqual({ presence_req: false });
+    await setCell(id, 2026, 10, 14, 'dispo', false, true, true); // P + TP off → le P gagne
+    row = await queryOne(`SELECT presence_req, tp_work FROM availability WHERE doctor_id = $1 AND year = 2026 AND month = 10 AND day = 14`, [id]);
+    expect(row).toEqual({ presence_req: true, tp_work: false });
   });
 
   // Regression: resetting a password after a case-only rename must NOT create a
